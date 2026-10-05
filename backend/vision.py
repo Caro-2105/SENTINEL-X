@@ -1,13 +1,17 @@
 """
 SENTINEL-X : reconnaissance des membres de l'équipe par la webcam.
 
-Chaîne identique à celle du workflow Orange qui a servi à entraîner `ai/V1.pkcls` :
+Chaîne :
     image de la webcam  ->  embedding (2048 valeurs)  ->  réseau de neurones Orange  ->  5 classes
+    image de la webcam  ->  YuNet (OpenCV)            ->  nombre de visages
+
 Classes du modèle : Caroline, Florent, Killian (équipe), Personne (inconnu), Vide (personne devant la caméra).
-Le modèle classe l'image ENTIÈRE : pas de détection de visage préalable.
+Le modèle Orange classe l'image ENTIÈRE ; YuNet sert à compter les visages et à sécuriser la décision.
 
 Résultat publié sur `sentinel/vision` (contrat dans MQTT_SCHEMA.md) environ toutes les PERIODE_ANALYSE_S.
-Prérequis : NumPy >= 2 (le .pkcls a été sauvegardé avec NumPy 2), Orange3, Orange3-ImageAnalytics.
+Prérequis : NumPy >= 2, Orange3, Orange3-ImageAnalytics, PyQt5, opencv-python >= 4.5.4,
+            et le fichier face_detection_yunet_2023mar.onnx (OpenCV Zoo : opencv/opencv_zoo,
+            models/face_detection_yunet), à placer dans ai/.
 """
 import json
 import os
@@ -21,8 +25,11 @@ import numpy as np
 import paho.mqtt.client as mqtt
 from Orange.data import Table, Domain
 
-MODEL_PATH = os.getenv("FACE_MODEL_PATH",
-                       os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ai", "V1.pkcls"))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MODEL_PATH = os.getenv("FACE_MODEL_PATH", os.path.join(BASE_DIR, "..", "ai", "V1.pkcls"))
+DETECTOR_PATH = os.getenv("FACE_DETECTOR_PATH",
+                          os.path.join(BASE_DIR, "..", "ai", "face_detection_yunet_2023mar.onnx"))
 # Embedder utilisé dans Orange pour entraîner le modèle. 2048 valeurs => "inception-v3" (ou "painters").
 # ATTENTION : inception-v3 passe par le serveur api.garaza.io (connexion Internet, images envoyées).
 EMBEDDER = os.getenv("FACE_EMBEDDER", "inception-v3")
@@ -34,7 +41,8 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC_VISION = "sentinel/vision"
 PERIODE_ANALYSE_S = 1.0
-TAILLE_IMAGE = (640, 480)     # redimensionnement systématique avant analyse
+TAILLE_IMAGE = (720, 480)     # redimensionnement systématique avant analyse
+SEUIL_VISAGE = 0.7            # score minimal de détection YuNet
 
 
 def load_orange_model():
@@ -51,6 +59,29 @@ def load_orange_model():
     return None
 
 
+def load_face_detector():
+    """Charge le détecteur de visages YuNet (ne mémorise aucun visage, il ne fait que compter)."""
+    if not os.path.isfile(DETECTOR_PATH):
+        print(f"❌ Détecteur YuNet introuvable à {DETECTOR_PATH} "
+              f"(télécharger face_detection_yunet_2023mar.onnx depuis opencv/opencv_zoo).")
+        return None
+    try:
+        detecteur = cv2.FaceDetectorYN.create(DETECTOR_PATH, "", TAILLE_IMAGE, score_threshold=SEUIL_VISAGE)
+        print("✅ Détecteur de visages YuNet chargé")
+        return detecteur
+    except Exception as e:
+        print(f"❌ Chargement de YuNet impossible ({e}). Vérifier : opencv-python >= 4.5.4.")
+        return None
+
+
+def compter_visages(detecteur, frame):
+    """Nombre de visages détectés dans la trame."""
+    h, w = frame.shape[:2]
+    detecteur.setInputSize((w, h))
+    _, visages = detecteur.detect(frame)
+    return 0 if visages is None else len(visages)
+
+
 def predire(model, embedding):
     """Probabilités par classe pour un embedding (le modèle applique lui-même sa normalisation)."""
     attributs = model.original_domain.attributes
@@ -62,15 +93,20 @@ def predire(model, embedding):
     return model(table, model.Probs)[0]
 
 
-def interpreter(classes, probs):
-    """Classe prédite -> (label, confiance, connu, visages) au format du topic `sentinel/vision`."""
+def interpreter(classes, probs, nb_visages):
+    """Classe prédite + nombre de visages -> (label, confiance, connu, visages) pour `sentinel/vision`.
+
+    Fail-closed : un membre n'est "connu" que si le modèle le reconnaît ET qu'exactement
+    un visage est détecté (0 = photo/objet/profil douteux, >=2 = impossible de savoir qui est qui).
+    """
     i = int(np.argmax(probs))
     label, confiance = classes[i], float(probs[i])
     if label == CLASSE_VIDE:
-        return None, confiance, False, 0
+        return "Vide", confiance, False, nb_visages
     if label == CLASSE_INCONNU:
-        return "inconnu", confiance, False, 1
-    return label, confiance, True, 1
+        return "inconnu", confiance, False, max(nb_visages, 1)
+    connu = (nb_visages == 1)
+    return label, confiance, connu, nb_visages
 
 
 def embedder_frame(embedder, frame):
@@ -94,7 +130,7 @@ def publish_vision(client, label, confiance, connu, visages):
     return payload
 
 
-def boucle_analyse(partage, model, embedder, client, arret):
+def boucle_analyse(partage, model, embedder, detecteur, client, arret):
     """Thread d'analyse : l'appel à l'embedder peut durer ~1 s, il ne doit pas figer l'affichage vidéo."""
     classes = list(model.domain.class_var.values)
     while not arret.is_set():
@@ -105,7 +141,8 @@ def boucle_analyse(partage, model, embedder, client, arret):
             continue
         try:
             probs = predire(model, embedder_frame(embedder, frame))
-            p = publish_vision(client, *interpreter(classes, probs))
+            nb_visages = compter_visages(detecteur, frame)
+            p = publish_vision(client, *interpreter(classes, probs, nb_visages))
             print(f"🧑 Vision -> {p}")
         except Exception as e:
             # Fail-closed : rien n'est publié, le backend considère vite la vision périmée (5 s)
@@ -118,7 +155,10 @@ def start_camera_auth():
     model = load_orange_model()
     if model is None:
         return
-    # Import tardif : orangecontrib.imageanalytics charge Qt (présent avec l'installation d'Orange)
+    detecteur = load_face_detector()
+    if detecteur is None:
+        return
+    # Import tardif : orangecontrib.imageanalytics charge Qt (PyQt5 requis)
     from orangecontrib.imageanalytics.image_embedder import ImageEmbedder
     embedder = ImageEmbedder(model=EMBEDDER)
 
@@ -130,7 +170,7 @@ def start_camera_auth():
         print(f"❌ Broker MQTT injoignable ({e}) : les résultats ne seront pas publiés.")
 
     # Ouvre la webcam (l'ID 0 est généralement la webcam par défaut)
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     if not cap.isOpened():
         print("❌ Erreur : Impossible d'ouvrir la webcam.")
         return
@@ -138,7 +178,9 @@ def start_camera_auth():
     print("🎥 Webcam activée. Appuyez sur 'q' pour quitter.")
     partage = {"frame": None, "lock": threading.Lock()}
     arret = threading.Event()
-    threading.Thread(target=boucle_analyse, args=(partage, model, embedder, client, arret), daemon=True).start()
+    threading.Thread(target=boucle_analyse,
+                     args=(partage, model, embedder, detecteur, client, arret),
+                     daemon=True).start()
 
     while True:
         ret, frame = cap.read()
