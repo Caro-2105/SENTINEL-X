@@ -1,0 +1,10 @@
+paho-mqtt==1.6.1
+scikit-learn
+numpy
+pandas
+orange3==3.40.0
+opencv-python
+Orange3-ImageAnalytics
+fastapi
+uvicorn
+psycopg2-binary

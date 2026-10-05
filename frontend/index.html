@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SENTINEL-X | Centre de Commandement Tactique</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            padding: 10px 0 20px 0;
+            border-bottom: 2px solid #1e293b;
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            color: #38bdf8;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background-color: #1e293b;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        .card h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: #94a3b8;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 10px;
+        }
+        .alert-box {
+            background-color: #334155;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .alert-status {
+            font-weight: bold;
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        .status-ok { background-color: #059669; color: white; }
+        .status-alert { background-color: #e11d48; color: white; }
+        .oled {
+            background: #000; border: 2px solid #475569; border-radius: 6px; padding: 12px 14px;
+            font-family: 'Courier New', monospace; color: #e2e8f0; margin-bottom: 10px;
+        }
+        .oled .l1 { font-size: 1.5rem; font-weight: bold; letter-spacing: 1px; }
+        .oled .l2 { font-size: 1rem; color: #94a3b8; }
+        .led { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: #334155; margin-right: 6px; vertical-align: middle; }
+        .led.on { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+        .severite-INFO { background-color: #059669; color: white; }
+        .severite-WARNING { background-color: #d97706; color: white; }
+        .severite-CRITICAL { background-color: #e11d48; color: white; }
+        table.events { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        table.events td, table.events th { padding: 6px 8px; border-bottom: 1px solid #334155; text-align: left; }
+        .ack-btn { background: #334155; color: #f8fafc; border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+        canvas {
+            width: 100% !important;
+            height: 250px !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>SENTINEL-X</h1>
+        <p>AetherCorp Industrial Solutions - Surveillance en temps réel</p>
+    </div>
+
+    <div class="dashboard-grid">
+        <!-- État des Systèmes -->
+        <div class="card">
+            <h2>Statut en Direct</h2>
+            <div class="alert-box">
+                <span>Détection Intrusion (PIR)</span>
+                <span id="status-pir" class="alert-status status-ok">SÉCURISÉ</span>
+            </div>
+            <div class="alert-box">
+                <span>Niveau de Gaz Anormal</span>
+                <span id="status-gas" class="alert-status status-ok">NORMAL</span>
+            </div>
+            <div class="alert-box">
+                <span>Dernier Badge RFID</span>
+                <span id="status-rfid" class="alert-status" style="background-color: #475569;">AUCUN</span>
+            </div>
+        </div>
+
+        <!-- Graphique Temp/Hum -->
+        <div class="card">
+            <h2>Environnement (Température & Humidité)</h2>
+            <canvas id="envChart"></canvas>
+        </div>
+
+        <!-- Graphique Gaz -->
+        <div class="card">
+            <h2>Niveau de Gaz (MQ-2)</h2>
+            <canvas id="gasChart"></canvas>
+        </div>
+
+        <!-- Scénario actif : ce que l'ESP8266 affiche / fait -->
+        <div class="card">
+            <h2>Scénario actif (retour de l'ESP8266)</h2>
+            <div class="oled">
+                <div class="l1" id="oled-l1">SENTINEL-X</div>
+                <div class="l2" id="oled-l2">Surveillance OK</div>
+            </div>
+            <div class="alert-box">
+                <span><span id="led-verte" class="led"></span>LED verte</span>
+                <span id="buzzer-etat" class="alert-status status-ok">SILENCIEUX</span>
+            </div>
+            <div class="alert-box">
+                <span>Scénarios</span>
+                <span id="scenarios-actifs" class="alert-status" style="background-color: #475569;">IDLE</span>
+            </div>
+            <div class="alert-box">
+                <span>Analyse IA environnement</span>
+                <span id="env-ia" class="alert-status status-ok">NORMAL</span>
+            </div>
+        </div>
+
+        <!-- Journal des événements -->
+        <div class="card">
+            <h2>Journal des événements</h2>
+            <table class="events">
+                <thead><tr><th>Heure</th><th>Scénario</th><th>Détail</th><th></th></tr></thead>
+                <tbody id="events-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

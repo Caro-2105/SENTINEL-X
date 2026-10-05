@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: sentinel-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: sentinel-db
+    environment:
+      POSTGRES_USER: aether
+      POSTGRES_PASSWORD: aether_password
+      POSTGRES_DB: sentinelx
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
