@@ -70,13 +70,12 @@ def evaluer_et_agir():
 
     # 2) Journal des événements (uniquement à l'apparition d'un scénario)
     for ev in decision.evenements:
-        fiche = membres.get(ev.label_ia) if ev.label_ia else None
         id_evt = db.insert_evenement(
             code_scenario=ev.code,
             message_ecran=f"{ev.ligne1} / {ev.ligne2}",
-            id_membre=fiche["id"] if fiche and ev.code in ("ACC-01", "ACC-05") else None,
             id_mesure=etat["id_mesure"],
-            id_detection=etat["id_detection"] if ev.code.startswith("ACC") else None,
+            # seuls les scénarios fondés sur un visage (ACC-01/02/05) pointent vers une détection
+            id_detection=etat["id_detection"] if ev.code in ("ACC-01", "ACC-02", "ACC-05") else None,
             categorie_env=ev.categorie_env, score_ia=ev.score_ia, modele_ia=ev.modele_ia,
             instantane=ev.instantane)
         print(f"📝 Événement #{id_evt} {ev.code} : {ev.ligne1} / {ev.ligne2}")

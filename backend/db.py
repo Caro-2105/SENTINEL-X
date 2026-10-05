@@ -7,6 +7,7 @@ from scenarios import SCENARIOS
 
 # Configuration de la base de données
 DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = "sentinelx"
 DB_USER = "aether"
 DB_PASS = "aether_password"
@@ -15,11 +16,19 @@ def get_db_connection():
     try:
         conn = psycopg2.connect(
             host=DB_HOST,
+            port=DB_PORT,
             database=DB_NAME,
             user=DB_USER,
             password=DB_PASS
         )
         return conn
+    except UnicodeDecodeError:
+        # Sous Windows, un PostgreSQL installé en local répond en français (cp1252) et psycopg2
+        # ne sait pas lire son message d'erreur : on est probablement connecté au MAUVAIS serveur.
+        print(f"❌ Connexion à {DB_HOST}:{DB_PORT} refusée avec un message non-UTF8 : un PostgreSQL "
+              "Windows local occupe sans doute le port. Voir `netstat -ano | findstr :5432`, "
+              "ou changer le port Docker et définir DB_PORT.")
+        return None
     except Exception as e:
         print(f"❌ Erreur de connexion à la base de données: {e}")
         return None
@@ -83,7 +92,6 @@ def init_db():
             id_evenement  SERIAL PRIMARY KEY,
             horodatage    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             code_scenario VARCHAR(10) NOT NULL REFERENCES scenario(code_scenario),
-            id_membre     INTEGER REFERENCES membre(id_membre) ON DELETE SET NULL,
             id_mesure     INTEGER REFERENCES sensor_data(id) ON DELETE SET NULL,
             id_detection  INTEGER REFERENCES detection_visage(id_detection) ON DELETE SET NULL,
             categorie_env VARCHAR(15),
@@ -189,17 +197,17 @@ def insert_detection(label_ia, confiance, connu, id_membre=None):
     conn.close()
     return id_detection
 
-def insert_evenement(code_scenario, message_ecran, id_membre=None, id_mesure=None, id_detection=None,
+def insert_evenement(code_scenario, message_ecran, id_mesure=None, id_detection=None,
                      categorie_env=None, score_ia=None, modele_ia=None, instantane=None):
     conn = get_db_connection()
     if conn is None:
         return None
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO evenement (code_scenario, id_membre, id_mesure, id_detection, categorie_env, "
+        "INSERT INTO evenement (code_scenario, id_mesure, id_detection, categorie_env, "
         "score_ia, modele_ia, message_ecran, instantane) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id_evenement",
-        (code_scenario, id_membre, id_mesure, id_detection, categorie_env, score_ia, modele_ia,
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id_evenement",
+        (code_scenario, id_mesure, id_detection, categorie_env, score_ia, modele_ia,
          message_ecran, Json(instantane) if instantane is not None else None)
     )
     id_evenement = cur.fetchone()[0]
@@ -219,7 +227,8 @@ def get_evenements(limit=50):
         "       e.message_ecran, e.instantane, e.acquitte "
         "FROM evenement e "
         "JOIN scenario s ON s.code_scenario = e.code_scenario "
-        "LEFT JOIN membre m ON m.id_membre = e.id_membre "
+        "LEFT JOIN detection_visage d ON d.id_detection = e.id_detection "
+        "LEFT JOIN membre m ON m.id_membre = d.id_membre "
         "ORDER BY e.horodatage DESC LIMIT %s", (limit,)
     )
     rows = cur.fetchall()

@@ -1,0 +1,25 @@
+# --- Données générées par Docker (ne jamais versionner) ---
+infra/postgres_data/
+infra/mosquitto/data/
+infra/mosquitto/log/
+
+# --- Secrets ---
+.env
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Exports de l'archiveur (CSV des anciennes mesures) ---
+archives/
+
+# --- Divers ---
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
