@@ -8,3 +8,5 @@ Orange3-ImageAnalytics
 fastapi
 uvicorn
 psycopg2-binary
+PyQt5 
+PyQtWebEngine
