@@ -27,7 +27,7 @@ from Orange.data import Table, Domain
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MODEL_PATH = os.getenv("FACE_MODEL_PATH", os.path.join(BASE_DIR, "..", "ai", "V1.pkcls"))
+MODEL_PATH = os.getenv("FACE_MODEL_PATH", os.path.join(BASE_DIR, "..", "ai", "V2.pkcls"))
 DETECTOR_PATH = os.getenv("FACE_DETECTOR_PATH",
                           os.path.join(BASE_DIR, "..", "ai", "face_detection_yunet_2023mar.onnx"))
 # Embedder utilisé dans Orange pour entraîner le modèle. 2048 valeurs => "inception-v3" (ou "painters").

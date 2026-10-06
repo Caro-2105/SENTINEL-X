@@ -7,7 +7,7 @@ from scenarios import SCENARIOS
 
 # Configuration de la base de données
 DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_PORT = int(os.getenv("DB_PORT", "5433"))
 DB_NAME = "sentinelx"
 DB_USER = "aether"
 DB_PASS = "aether_password"
@@ -151,6 +151,25 @@ def get_latest_data(limit=50):
 
     # On renvoie dans l'ordre chronologique pour le graphique
     return list(reversed(rows))
+
+def get_recent_series(seconds=300):
+    """Mesures des `seconds` dernières secondes (ordre chronologique), pour l'IA analytique.
+
+    `ts` = epoch du timestamp stocké (cohérent d'une ligne à l'autre, seule la différence compte).
+    """
+    conn = get_db_connection()
+    if conn is None:
+        return []
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute(
+        "SELECT EXTRACT(EPOCH FROM timestamp)::float8 AS ts, temperature, humidite, gaz "
+        "FROM sensor_data WHERE timestamp >= CURRENT_TIMESTAMP - make_interval(secs => %s) "
+        "ORDER BY timestamp", (seconds,)
+    )
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
 
 # ----------------------------------------------------------------------------------
 # Stories : membres, détections visage, événements
