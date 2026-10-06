@@ -3,141 +3,113 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SENTINEL-X | Centre de Commandement Tactique</title>
+    <title>SENTINEL-X | Supervision</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #0f172a;
-            color: #f8fafc;
-            margin: 0;
-            padding: 20px;
-        }
-        .header {
-            text-align: center;
-            padding: 10px 0 20px 0;
-            border-bottom: 2px solid #1e293b;
-            margin-bottom: 20px;
-        }
-        .header h1 {
-            color: #38bdf8;
-            margin: 0;
-            text-transform: uppercase;
-            letter-spacing: 2px;
-        }
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 20px;
-        }
-        .card {
-            background-color: #1e293b;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        }
-        .card h2 {
-            margin-top: 0;
-            font-size: 1.2rem;
-            color: #94a3b8;
-            border-bottom: 1px solid #334155;
-            padding-bottom: 10px;
-        }
-        .alert-box {
-            background-color: #334155;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .alert-status {
-            font-weight: bold;
-            padding: 5px 10px;
-            border-radius: 5px;
-        }
-        .status-ok { background-color: #059669; color: white; }
-        .status-alert { background-color: #e11d48; color: white; }
-        .oled {
-            background: #000; border: 2px solid #475569; border-radius: 6px; padding: 12px 14px;
-            font-family: 'Courier New', monospace; color: #e2e8f0; margin-bottom: 10px;
-        }
-        .oled .l1 { font-size: 1.5rem; font-weight: bold; letter-spacing: 1px; }
-        .oled .l2 { font-size: 1rem; color: #94a3b8; }
-        .led { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: #334155; margin-right: 6px; vertical-align: middle; }
-        .led.on { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
-        .severite-INFO { background-color: #059669; color: white; }
-        .severite-WARNING { background-color: #d97706; color: white; }
-        .severite-CRITICAL { background-color: #e11d48; color: white; }
-        table.events { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        table.events td, table.events th { padding: 6px 8px; border-bottom: 1px solid #334155; text-align: left; }
-        .ack-btn { background: #334155; color: #f8fafc; border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
-        canvas {
-            width: 100% !important;
-            height: 250px !important;
-        }
+        :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#f8fafc; --mut:#94a3b8;
+                --ok:#059669; --warn:#d97706; --bad:#e11d48; --acc:#38bdf8; }
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: var(--bg); color: var(--txt); margin: 0; padding: 16px; }
+        .wrap { max-width: 1100px; margin: 0 auto; }
+        header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+        header h1 { margin: 0; font-size: 1.4rem; letter-spacing: 2px; color: var(--acc); }
+
+        /* Bandeau "retour ESP8266" toujours visible */
+        .esp { display: flex; align-items: center; gap: 14px; background: var(--card); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; flex-wrap: wrap; }
+        .oled { background: #000; border: 2px solid #475569; border-radius: 6px; padding: 6px 12px; font-family: 'Courier New', monospace; min-width: 230px; }
+        .oled .l1 { font-weight: bold; letter-spacing: 1px; }
+        .oled .l2 { font-size: .85rem; color: var(--mut); }
+        .led { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--line); margin-right: 6px; vertical-align: middle; }
+        .led.on { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+
+        nav { display: flex; gap: 6px; margin-bottom: 14px; }
+        nav button { background: var(--card); color: var(--mut); border: 0; border-radius: 8px 8px 0 0; padding: 10px 18px; font-size: 1rem; cursor: pointer; }
+        nav button.active { color: var(--txt); box-shadow: inset 0 -3px 0 var(--acc); }
+        .tab { display: none; } .tab.active { display: block; }
+
+        .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 14px; }
+        .tile { background: var(--card); border-radius: 10px; padding: 12px 14px; }
+        .tile .k { color: var(--mut); font-size: .8rem; margin-bottom: 6px; }
+        .badge { display: inline-block; font-weight: bold; padding: 4px 10px; border-radius: 5px; background: #475569; color: #fff; }
+        .ok { background: var(--ok); } .warn { background: var(--warn); } .bad { background: var(--bad); } .off { background: #475569; }
+
+        .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
+        .card { background: var(--card); border-radius: 10px; padding: 14px 16px; }
+        .card h2 { margin: 0 0 8px; font-size: 1rem; color: var(--mut); font-weight: 600; }
+        .chart-box { position: relative; height: 240px; }
+
+        /* Onglet caméra */
+        .cam-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+        .cam-view { position: relative; background: #000; border-radius: 10px; aspect-ratio: 3 / 2; max-width: 720px; margin: 0 auto; overflow: hidden; }
+        .cam-view img { width: 100%; height: 100%; object-fit: contain; display: none; }
+        .cam-view.live img { display: block; }
+        .cam-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--mut); text-align: center; padding: 20px; gap: 6px; }
+        .cam-view.live .cam-overlay { display: none; }
+        .cam-overlay .big { font-size: 1.3rem; color: var(--txt); }
+        .btn { background: var(--acc); color: #04293a; border: 0; border-radius: 8px; padding: 10px 18px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+        .btn:disabled { background: #475569; color: #94a3b8; cursor: default; }
+        .btn.sec { background: var(--line); color: var(--txt); }
+        .ident { margin: 14px auto 0; max-width: 720px; }
+
+        table.events { width: 100%; border-collapse: collapse; font-size: .9rem; }
+        table.events td, table.events th { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; }
+        .ack-btn { background: var(--line); color: var(--txt); border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+        .INFO { background: var(--ok); } .WARNING { background: var(--warn); } .CRITICAL { background: var(--bad); }
     </style>
 </head>
 <body>
-
-    <div class="header">
+<div class="wrap">
+    <header>
         <h1>SENTINEL-X</h1>
-        <p>AetherCorp Industrial Solutions - Surveillance en temps réel</p>
+        <span id="liaison" class="badge off">Backend : connexion…</span>
+    </header>
+
+    <!-- Ce que fait l'ESP8266 en ce moment (écran, LED, buzzer) -->
+    <div class="esp">
+        <div class="oled"><div class="l1" id="oled-l1">SENTINEL-X</div><div class="l2" id="oled-l2">Surveillance OK</div></div>
+        <span><span id="led-verte" class="led"></span>LED verte</span>
+        <span id="buzzer-etat" class="badge ok">SILENCIEUX</span>
+        <span id="scenarios-actifs" class="badge off">IDLE</span>
     </div>
 
-    <div class="dashboard-grid">
-        <!-- État des Systèmes -->
-        <div class="card">
-            <h2>Statut en Direct</h2>
-            <div class="alert-box">
-                <span>Détection Intrusion (PIR)</span>
-                <span id="status-pir" class="alert-status status-ok">SÉCURISÉ</span>
-            </div>
-            <div class="alert-box">
-                <span>Niveau de Gaz Anormal</span>
-                <span id="status-gas" class="alert-status status-ok">NORMAL</span>
-            </div>
-            <div class="alert-box">
-                <span>Dernier Badge RFID</span>
-                <span id="status-rfid" class="alert-status" style="background-color: #475569;">AUCUN</span>
-            </div>
-        </div>
+    <nav>
+        <button data-tab="capteurs" class="active">Capteurs</button>
+        <button data-tab="camera">Caméra</button>
+        <button data-tab="evenements">Événements</button>
+    </nav>
 
-        <!-- Graphique Temp/Hum -->
-        <div class="card">
-            <h2>Environnement (Température & Humidité)</h2>
-            <canvas id="envChart"></canvas>
+    <!-- ===== Capteurs ===== -->
+    <section id="tab-capteurs" class="tab active">
+        <div class="tiles">
+            <div class="tile"><div class="k">Détecteur de présence</div><span id="status-pir" class="badge off">—</span></div>
+            <div class="tile"><div class="k">Gaz / fumée</div><span id="status-gas" class="badge off">—</span></div>
+            <div class="tile"><div class="k">Analyse IA environnement</div><span id="env-ia" class="badge off">—</span></div>
+            <div class="tile"><div class="k">Dernier badge RFID</div><span id="status-rfid" class="badge off">AUCUN</span></div>
         </div>
-
-        <!-- Graphique Gaz -->
-        <div class="card">
-            <h2>Niveau de Gaz (MQ-2)</h2>
-            <canvas id="gasChart"></canvas>
+        <div class="grid2">
+            <div class="card"><h2>Température et humidité</h2><div class="chart-box"><canvas id="envChart"></canvas></div></div>
+            <div class="card"><h2>Gaz / fumée</h2><div class="chart-box"><canvas id="gasChart"></canvas></div></div>
         </div>
+    </section>
 
-        <!-- Scénario actif : ce que l'ESP8266 affiche / fait -->
+    <!-- ===== Caméra ===== -->
+    <section id="tab-camera" class="tab">
         <div class="card">
-            <h2>Scénario actif (retour de l'ESP8266)</h2>
-            <div class="oled">
-                <div class="l1" id="oled-l1">SENTINEL-X</div>
-                <div class="l2" id="oled-l2">Surveillance OK</div>
+            <div class="cam-top">
+                <span id="cam-badge" class="badge off">—</span>
+                <button id="cam-btn" class="btn" disabled>Activer la caméra</button>
+                <span id="cam-msg" style="color: var(--mut)"></span>
             </div>
-            <div class="alert-box">
-                <span><span id="led-verte" class="led"></span>LED verte</span>
-                <span id="buzzer-etat" class="alert-status status-ok">SILENCIEUX</span>
+            <div id="cam-view" class="cam-view">
+                <img id="cam-img" alt="Flux de la caméra">
+                <div class="cam-overlay"><div class="big" id="cam-over-t">Caméra éteinte</div><div id="cam-over-s">Aucune présence détectée</div></div>
             </div>
-            <div class="alert-box">
-                <span>Scénarios</span>
-                <span id="scenarios-actifs" class="alert-status" style="background-color: #475569;">IDLE</span>
-            </div>
-            <div class="alert-box">
-                <span>Analyse IA environnement</span>
-                <span id="env-ia" class="alert-status status-ok">NORMAL</span>
-            </div>
+            <div class="ident" id="cam-ident"></div>
         </div>
+    </section>
 
-        <!-- Journal des événements -->
+    <!-- ===== Événements ===== -->
+    <section id="tab-evenements" class="tab">
         <div class="card">
             <h2>Journal des événements</h2>
             <table class="events">
@@ -145,8 +117,8 @@
                 <tbody id="events-body"></tbody>
             </table>
         </div>
-    </div>
-
-    <script src="app.js"></script>
+    </section>
+</div>
+<script src="app.js"></script>
 </body>
 </html>

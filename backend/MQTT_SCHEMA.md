@@ -97,3 +97,16 @@ Publié à chaque changement d'état et au moins toutes les 2 s (l'ESP repasse e
 | ENV-02 | IA environnement : niveau 2 (critique) | non | 2 | ALERTE DANGER / <catégorie> |
 
 Les scénarios Accès et Environnement sont indépendants : un membre autorisé présent pendant une fuite de gaz garde la LED verte, mais le buzzer et l'écran passent en alerte.
+
+## Caméra pilotée par la présence (vision.py <-> backend <-> front)
+
+La caméra n'est allumée que si le PIR est actif (maintien 10 s après la dernière détection) ou si le front la force.
+
+| Topic | Sens | Payload |
+|---|---|---|
+| `sentinel/camera/state` | vision.py -> backend (1/s, non retenu) | `{"actif": bool, "mode": "auto"\|"manuel", "erreur": str\|null, "flux": "http://localhost:8001/stream"}` |
+| `sentinel/camera/cmd` | backend -> vision.py | `{"action": "on"}` (forcer, 5 min max) ou `{"action": "auto"}` (piloté par le PIR) |
+
+API : `POST /api/camera` `{"action": "on"|"auto"}` ; `GET /api/status` contient `camera` (`en_ligne` = false si aucun état reçu depuis 5 s).
+Le flux MJPEG (`/stream`, `/snapshot.jpg`) n'écoute que sur 127.0.0.1 : il n'est visible que depuis le PC qui exécute vision.py.
+Variables : `CAMERA_INDEX` (défaut 1), `CAMERA_STREAM_PORT` (8001), `FACE_WINDOW=1` pour garder aussi la fenêtre OpenCV.

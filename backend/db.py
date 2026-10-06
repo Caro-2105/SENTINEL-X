@@ -1,4 +1,7 @@
+import threading
+
 import psycopg2
+from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor, Json
 import datetime
 import os
@@ -6,32 +9,82 @@ import os
 from scenarios import SCENARIOS
 
 # Configuration de la base de données
-DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_PORT = int(os.getenv("DB_PORT", "5433"))
 DB_NAME = "sentinelx"
 DB_USER = "aether"
 DB_PASS = "aether_password"
 
+POOL_MAX = 10
+_pool = None
+_pool_lock = threading.Lock()
+_places = threading.BoundedSemaphore(POOL_MAX)   # les appels attendent une place au lieu d'échouer
+
+
+class _ConnexionPool:
+    """Même interface qu'une connexion psycopg2, mais close() la rend au pool au lieu de la fermer."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self, *a, **k):
+        return self._conn.cursor(*a, **k)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        if self._conn is not None:
+            _pool.putconn(self._conn)       # putconn annule toute transaction restée ouverte
+            self._conn = None
+            _places.release()
+
+    def __del__(self):                      # si une requête échoue avant close(), la connexion revient quand même
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
 def get_db_connection():
+    """Connexion réutilisée depuis un pool : ouvrir une connexion à chaque appel coûtait des centaines de ms."""
+    global _pool
+    if not _places.acquire(timeout=10):
+        print("❌ Base de données saturée : plus de connexion disponible après 10 s")
+        return None
+    place_prise = True
     try:
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            database=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS
-        )
-        return conn
+        with _pool_lock:
+            if _pool is None:
+                _pool = pg_pool.ThreadedConnectionPool(
+                    1, POOL_MAX, host=DB_HOST, port=DB_PORT, database=DB_NAME, user=DB_USER, password=DB_PASS)
+        for _ in range(8):
+            conn = _pool.getconn()
+            try:                            # base/Docker redémarrés : une connexion du pool peut être morte
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                conn.rollback()
+                place_prise = False         # la place est rendue par close()
+                return _ConnexionPool(conn)
+            except psycopg2.Error:
+                _pool.putconn(conn, close=True)
+        raise psycopg2.OperationalError("aucune connexion valide dans le pool")
     except UnicodeDecodeError:
         # Sous Windows, un PostgreSQL installé en local répond en français (cp1252) et psycopg2
         # ne sait pas lire son message d'erreur : on est probablement connecté au MAUVAIS serveur.
         print(f"❌ Connexion à {DB_HOST}:{DB_PORT} refusée avec un message non-UTF8 : un PostgreSQL "
-              "Windows local occupe sans doute le port. Voir `netstat -ano | findstr :5432`, "
+              "Windows local occupe sans doute le port. Voir `netstat -ano | findstr :5433`, "
               "ou changer le port Docker et définir DB_PORT.")
         return None
     except Exception as e:
         print(f"❌ Erreur de connexion à la base de données: {e}")
         return None
+    finally:
+        if place_prise:
+            _places.release()
 
 def init_db():
     conn = get_db_connection()

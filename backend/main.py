@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Literal
 import paho.mqtt.client as mqtt
 import json
 import threading
@@ -27,6 +29,8 @@ MQTT_PORT = 1883
 MQTT_TOPIC = "sentinel/sensors/#"          # ESP8266 -> serveur (capteurs)
 MQTT_TOPIC_VISION = "sentinel/vision"      # script caméra -> serveur (identité)
 MQTT_TOPIC_COMMANDES = "sentinel/commandes"  # serveur -> ESP8266 (LED verte, buzzer, OLED)
+MQTT_TOPIC_CAMERA_ETAT = "sentinel/camera/state"  # vision.py -> serveur (caméra allumée ? mode ?)
+MQTT_TOPIC_CAMERA_CMD = "sentinel/camera/cmd"      # serveur -> vision.py (forcer / revenir en auto)
 HEARTBEAT_COMMANDE_S = 2.0                 # la commande est ré-émise même sans changement
 VISION_PERSIST_S = 10.0                    # une détection identique n'est consignée qu'une fois / 10 s
 
@@ -35,7 +39,7 @@ moteur = MoteurScenarios()
 analytique = AnalyticsAI()
 _lock = threading.Lock()
 mqtt_client = None
-etat = {"capteurs": None, "vision": None, "env": None, "decision": None,
+etat = {"camera": None, "capteurs": None, "vision": None, "env": None, "decision": None,
         "id_mesure": None, "id_detection": None, "commande": None, "commande_ts": 0.0}
 _membres_cache = {"data": {}, "ts": 0.0}
 _derniere_detection = {"label": None, "connu": None, "ts": 0.0}
@@ -122,16 +126,25 @@ def traiter_vision(data):
         evaluer_et_agir()          # réaction immédiate : pas besoin d'attendre le prochain message capteurs
 
 
+def traiter_camera_etat(data):
+    with _lock:
+        etat["camera"] = {**data, "recu_le": time.time()}
+
+
 def on_connect(client, userdata, flags, rc):
     print(f"📡 Connecté au broker MQTT avec le code {rc}")
     client.subscribe(MQTT_TOPIC)
     client.subscribe(MQTT_TOPIC_VISION)
+    client.subscribe(MQTT_TOPIC_CAMERA_ETAT)
 
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
-        print(f"📥 [{msg.topic}] {data}")
-        if msg.topic == MQTT_TOPIC_VISION:
+        if msg.topic != MQTT_TOPIC_CAMERA_ETAT:      # l'état caméra (1 msg/s) est trop bavard pour la console
+            print(f"📥 [{msg.topic}] {data}")
+        if msg.topic == MQTT_TOPIC_CAMERA_ETAT:
+            traiter_camera_etat(data)
+        elif msg.topic == MQTT_TOPIC_VISION:
             traiter_vision(data)
         else:
             traiter_capteurs(data)
@@ -172,16 +185,43 @@ def get_history(limit: int = 50):
     data = db.get_latest_data(limit=limit)
     return {"history": data}
 
+CAMERA_HORS_LIGNE_S = 5.0      # pas d'état reçu depuis 5 s => vision.py n'est pas lancé
+
+
+def _camera_publique():
+    cam = etat["camera"]
+    if cam is None or time.time() - cam["recu_le"] > CAMERA_HORS_LIGNE_S:
+        return {"en_ligne": False, "actif": False, "mode": None, "flux": None}
+    return {"en_ligne": True, "actif": bool(cam.get("actif")), "mode": cam.get("mode"), "erreur": cam.get("erreur"),
+            "flux": cam.get("flux")}
+
+
+class CommandeCamera(BaseModel):
+    action: Literal["on", "auto"]
+
+
+@app.post("/api/camera")
+def commande_camera(cmd: CommandeCamera):
+    """Bouton du front : `on` force la caméra allumée, `auto` la rend pilotée par le détecteur de présence."""
+    if mqtt_client is None:
+        raise HTTPException(status_code=503, detail="MQTT indisponible")
+    mqtt_client.publish(MQTT_TOPIC_CAMERA_CMD, json.dumps({"action": cmd.action}))
+    return {"envoye": cmd.action}
+
+
 @app.get("/api/status")
 def get_status():
     """État en direct : capteurs, vision, analyse IA et commande envoyée à l'ESP (LED / buzzer / OLED)."""
-    with _lock:
-        return {
-            "capteurs": asdict(etat["capteurs"]) if etat["capteurs"] else None,
-            "vision": asdict(etat["vision"]) if etat["vision"] else None,
-            "env": asdict(etat["env"]) if etat["env"] else None,
-            "decision": etat["decision"].to_dict() if etat["decision"] else None,
-        }
+    # Sans verrou : le thread MQTT garde _lock pendant ses accès à la base, et le front ne doit pas attendre.
+    # Chaque valeur de `etat` est remplacée d'un bloc (jamais modifiée en place) : la lire est sans risque.
+    capteurs, vision, env, decision = etat["capteurs"], etat["vision"], etat["env"], etat["decision"]
+    return {
+        "capteurs": asdict(capteurs) if capteurs else None,
+        "vision": asdict(vision) if vision else None,
+        "env": asdict(env) if env else None,
+        "decision": decision.to_dict() if decision else None,
+        "camera": _camera_publique(),
+    }
 
 @app.get("/api/analytics")
 def get_analytics():
