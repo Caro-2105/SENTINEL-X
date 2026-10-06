@@ -101,7 +101,7 @@ class Vision:
 
 @dataclass
 class EnvResult:
-    """Sortie de l'IA environnementale (voir env_ai.py)."""
+    """Sortie de l'IA environnementale (voir analytics.py)."""
     niveau: int = 0                      # 0 normal / 1 anomalie / 2 critique
     score: float = 0.0                   # 0..1
     categorie: str = "aucune"            # gaz | incendie | surchauffe | humidite | derive

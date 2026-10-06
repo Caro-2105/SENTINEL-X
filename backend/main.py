@@ -8,8 +8,7 @@ from dataclasses import asdict
 import uvicorn
 import db
 from scenarios import MoteurScenarios, Capteurs, Vision
-from env_ai import EnvAnalyzer
-from analytics import AnalyticsAI, fusionner
+from analytics import AnalyticsAI
 
 app = FastAPI(title="SENTINEL-X API")
 
@@ -33,7 +32,6 @@ VISION_PERSIST_S = 10.0                    # une détection identique n'est cons
 
 # --- État partagé (un seul thread MQTT écrit ; l'API lit) ---
 moteur = MoteurScenarios()
-analyseur = EnvAnalyzer()
 analytique = AnalyticsAI()
 _lock = threading.Lock()
 mqtt_client = None
@@ -96,10 +94,10 @@ def traiter_capteurs(data):
     c = Capteurs(temperature=_num(data.get("temperature")), humidite=_num(data.get("humidite")),
                  gaz=_num(data.get("gaz")), presence=int(data.get("presence") or 0),
                  ir_temp=_num(data.get("ir_temp")), rfid_uid=data.get("rfid_uid"), ts=now)
-    env_analytique = analytique.analyser()      # relit les 5 dernières minutes en base (la mesure vient d'être insérée)
+    env = analytique.analyser(c, now)      # relit les 5 dernières minutes en base (la mesure vient d'être insérée)
     with _lock:
         etat["capteurs"], etat["id_mesure"] = c, id_mesure
-        etat["env"] = fusionner(analyseur.analyser(c, now), env_analytique)
+        etat["env"] = env
         evaluer_et_agir()
 
 
