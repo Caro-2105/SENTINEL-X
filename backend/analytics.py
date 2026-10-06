@@ -36,9 +36,9 @@ MIN_POINTS_MINUTE = 3          # une minute avec moins de mesures n'est pas fiab
 #   var_mode             : "abs" (en unité de la mesure, ex. °C) ou "pct" (en % de la minute précédente)
 # --------------------------------------------------------------------------------------
 CONFIG = {
-    "temperature": dict(unite="°C", min=15.0, max=25.0, alerte_min=16.0, alerte_max=24.0,
+    "temperature": dict(unite="°C", min=0.0, max=28.0, alerte_min=10.0, alerte_max=25.0,
                         var_max=1.0, var_mode="abs"),
-    "humidite":    dict(unite="%", min=30.0, max=75.0, alerte_min=35.0, alerte_max=70.0,
+    "humidite":    dict(unite="%", min=30.0, max=80.0, alerte_min=35.0, alerte_max=65.0,
                         var_max=10.0, var_mode="pct"),
     # Gaz : valeurs PROVISOIRES (reprises de env_ai.py), à ajuster quand les seuils seront connus.
     "gaz":         dict(unite="", min=None, max=float(GAZ_CRITIQUE), alerte_min=None, alerte_max=float(GAZ_PREALERTE),
