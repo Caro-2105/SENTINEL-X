@@ -28,7 +28,7 @@ MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC = "sentinel/sensors/#"          # ESP8266 -> serveur (capteurs)
 MQTT_TOPIC_VISION = "sentinel/vision"      # script caméra -> serveur (identité)
-MQTT_TOPIC_COMMANDES = "sentinel/commandes"  # serveur -> ESP8266 (LED verte, buzzer, OLED)
+MQTT_TOPIC_COMMANDES = "sentinel/commandes"  # serveur -> ESP8266 (buzzer, OLED)
 MQTT_TOPIC_CAMERA_ETAT = "sentinel/camera/state"  # vision.py -> serveur (caméra allumée ? mode ?)
 MQTT_TOPIC_CAMERA_CMD = "sentinel/camera/cmd"      # serveur -> vision.py (forcer / revenir en auto)
 HEARTBEAT_COMMANDE_S = 2.0                 # la commande est ré-émise même sans changement
@@ -78,8 +78,8 @@ def evaluer_et_agir():
             code_scenario=ev.code,
             message_ecran=f"{ev.ligne1} / {ev.ligne2}",
             id_mesure=etat["id_mesure"],
-            # seuls les scénarios fondés sur un visage (ACC-01/02/05) pointent vers une détection
-            id_detection=etat["id_detection"] if ev.code in ("ACC-01", "ACC-02", "ACC-05") else None,
+            # seuls les scénarios fondés sur un visage (ACC-01/02/05/06) pointent vers une détection
+            id_detection=etat["id_detection"] if ev.code in ("ACC-01", "ACC-02", "ACC-05", "ACC-06") else None,
             categorie_env=ev.categorie_env, score_ia=ev.score_ia, modele_ia=ev.modele_ia,
             instantane=ev.instantane)
         print(f"📝 Événement #{id_evt} {ev.code} : {ev.ligne1} / {ev.ligne2}")
@@ -211,7 +211,7 @@ def commande_camera(cmd: CommandeCamera):
 
 @app.get("/api/status")
 def get_status():
-    """État en direct : capteurs, vision, analyse IA et commande envoyée à l'ESP (LED / buzzer / OLED)."""
+    """État en direct : capteurs, vision, analyse IA et commande envoyée à l'ESP (buzzer / OLED)."""
     # Sans verrou : le thread MQTT garde _lock pendant ses accès à la base, et le front ne doit pas attendre.
     # Chaque valeur de `etat` est remplacée d'un bloc (jamais modifiée en place) : la lire est sans risque.
     capteurs, vision, env, decision = etat["capteurs"], etat["vision"], etat["env"], etat["decision"]

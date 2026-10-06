@@ -2,10 +2,10 @@
 Simulateur SENTINEL-X : rejoue les stories SANS matériel.
 
 Il joue à la fois l'ESP8266 (publie `sentinel/sensors`), la caméra (publie `sentinel/vision`)
-et affiche ce que l'ESP ferait en recevant `sentinel/commandes` (LED verte / buzzer / OLED).
+et affiche ce que l'ESP ferait en recevant `sentinel/commandes` (buzzer / OLED).
 
 Usage :  python simulator.py <scénario> [--duree 40] [--membre Caroline]
-Scénarios : normal | membre | inconnu | sans_visage | usurpation | gaz | incendie | derive | demo | aleatoire
+Scénarios : normal | membre | confiance_faible | inconnu | sans_visage | usurpation | gaz | incendie | derive | demo | aleatoire
 """
 import argparse
 import json
@@ -33,8 +33,7 @@ def on_message(client, userdata, msg):
     """ESP virtuel : affiche l'état des actionneurs."""
     try:
         c = json.loads(msg.payload.decode())
-        led = "🟢 LED verte ON " if c.get("led_verte") else "⚫ LED verte off"
-        print(f"      ESP ▸ {led} | 🔔 {BUZZER.get(c.get('buzzer'), '?'):<16} | OLED: [{c.get('ligne1')}] [{c.get('ligne2')}]")
+        print(f"      ESP ▸ 🔔 {BUZZER.get(c.get('buzzer'), '?'):<16} | OLED: [{c.get('ligne1')}] [{c.get('ligne2')}]")
     except Exception:
         pass
 
@@ -63,6 +62,9 @@ def scenario(nom, membre):
         elif nom == "membre":
             s.update(presence=1, ir_temp=bruit(34.5, 0.5))
             v = vision(membre, round(random.uniform(0.88, 0.97), 2), True, 1)
+        elif nom == "confiance_faible":    # membre reconnu par le modèle, mais sous 80 % de confiance
+            s.update(presence=1, ir_temp=bruit(34.5, 0.5))
+            v = vision(membre, round(random.uniform(0.60, 0.78), 2), True, 1)
         elif nom == "inconnu":
             s.update(presence=1, ir_temp=bruit(34.0, 0.5))
             v = vision("inconnu", round(random.uniform(0.3, 0.5), 2), False, 1)

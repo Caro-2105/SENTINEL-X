@@ -130,7 +130,6 @@ function majBandeauEsp(d) {
     if (!d) return;
     $('oled-l1').textContent = d.ligne1;
     $('oled-l2').textContent = d.ligne2;
-    $('led-verte').className = 'led' + (d.led_verte ? ' on' : '');
     setBadge($('buzzer-etat'), BUZZER_TXT[d.buzzer] || '?', d.buzzer > 0 ? 'bad' : 'ok');
     setBadge($('scenarios-actifs'), d.scenarios.join(' + '), 'off');
 }

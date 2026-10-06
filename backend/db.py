@@ -124,7 +124,6 @@ def init_db():
             categorie     VARCHAR(15) NOT NULL CHECK (categorie IN ('ACCES','ENVIRONNEMENT','SYSTEME')),
             libelle       VARCHAR(120) NOT NULL,
             severite      VARCHAR(10) NOT NULL CHECK (severite IN ('INFO','WARNING','CRITICAL')),
-            led_verte     BOOLEAN NOT NULL,
             buzzer        SMALLINT NOT NULL CHECK (buzzer BETWEEN 0 AND 2),
             ligne1_ecran  VARCHAR(21) NOT NULL,
             ligne2_ecran  VARCHAR(21) NOT NULL
@@ -156,16 +155,18 @@ def init_db():
             acquitte_le   TIMESTAMP
         )
     ''')
+    # La LED verte n'existe plus côté serveur : on retire l'ancienne colonne (catalogue régénéré à chaque démarrage)
+    cur.execute("ALTER TABLE scenario DROP COLUMN IF EXISTS led_verte")
     # Catalogue des scénarios : source unique = scenarios.SCENARIOS
     for code, s in SCENARIOS.items():
         cur.execute('''
-            INSERT INTO scenario (code_scenario, categorie, libelle, severite, led_verte, buzzer, ligne1_ecran, ligne2_ecran)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO scenario (code_scenario, categorie, libelle, severite, buzzer, ligne1_ecran, ligne2_ecran)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (code_scenario) DO UPDATE SET
                 categorie = EXCLUDED.categorie, libelle = EXCLUDED.libelle, severite = EXCLUDED.severite,
-                led_verte = EXCLUDED.led_verte, buzzer = EXCLUDED.buzzer,
+                buzzer = EXCLUDED.buzzer,
                 ligne1_ecran = EXCLUDED.ligne1_ecran, ligne2_ecran = EXCLUDED.ligne2_ecran
-        ''', (code, s["categorie"], s["libelle"], s["severite"], s["led_verte"], s["buzzer"],
+        ''', (code, s["categorie"], s["libelle"], s["severite"], s["buzzer"],
               s["ligne1"], s["ligne2"]))
     conn.commit()
     cur.close()

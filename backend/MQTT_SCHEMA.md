@@ -62,7 +62,7 @@ Publié par `vision.py` environ 1 fois par seconde.
 | Clé JSON | Type | Description |
 | :--- | :--- | :--- |
 | `label` | `String` ou `null` | Classe du modèle : prénom du membre, `"inconnu"` (classe *Personne*) ou `null` (classe *Vide*, personne devant la caméra). |
-| `confiance` | `Number` 0..1 | Confiance de la prédiction. Sous 0.70 le visage n'est pas accepté. |
+| `confiance` | `Number` 0..1 | Confiance de la prédiction. Sous 0.80 le visage n'est pas accepté (l'écran affiche « CONFIANCE TROP FAIBLE » et le taux). |
 | `connu` | `Boolean` | `true` si le modèle IA considère la personne comme membre de l'équipe. |
 | `visages` | `Integer` | Nombre de visages détectés dans l'image (0 = personne). |
 
@@ -76,27 +76,27 @@ Publié à chaque changement d'état et au moins toutes les 2 s (l'ESP repasse e
 
 | Clé JSON | Type | Description |
 | :--- | :--- | :--- |
-| `led_verte` | `Boolean` | Allume la LED verte (accès autorisé). |
 | `buzzer` | `Integer` | `0` silencieux, `1` bip intermittent (anomalie), `2` alarme continue rapide (critique / intrusion). |
 | `ligne1` / `ligne2` | `String` | Texte OLED, ASCII sans accents, 21 caractères maximum. |
 
 ```json
-{"led_verte": true, "buzzer": 0, "ligne1": "ACCES AUTORISE", "ligne2": "Bienvenue Alice"}
+{"buzzer": 0, "ligne1": "ACCES AUTORISE", "ligne2": "Bienvenue Alice"}
 ```
 
 ## Stories gérées (moteur `backend/scenarios.py`)
 
-| Code | Condition | LED verte | Buzzer | Écran |
-| :--- | :--- | :---: | :---: | :--- |
-| ACC-01 | présence + visage connu (conf. >= 0.70) + chaleur humaine | oui | 0 | ACCES AUTORISE / Bienvenue <nom> |
-| ACC-02 | présence + visage inconnu / confiance faible / membre désactivé | non | 2 | INTRUSION / Personne inconnue |
-| ACC-03 | présence, pas encore de visage (< 8 s) | non | 0 | IDENTIFICATION / Regardez la camera |
-| ACC-04 | présence, aucun visage exploitable après 8 s | non | 1 | ALERTE PRESENCE / Non identifie |
-| ACC-05 | présence + visage connu mais `ir_temp` hors 28-42 °C (photo / écran) | non | 2 | ACCES REFUSE / Chaleur absente |
-| ENV-01 | IA environnement : niveau 1 (anomalie, dérive) | non | 1 | ATTENTION / <catégorie> |
-| ENV-02 | IA environnement : niveau 2 (critique) | non | 2 | ALERTE DANGER / <catégorie> |
+| Code | Condition | Buzzer | Écran |
+| :--- | :--- | :---: | :--- |
+| ACC-01 | présence + visage connu (conf. >= 0.80) + chaleur humaine | 0 | ACCES AUTORISE / Bienvenue <label> |
+| ACC-02 | présence + visage inconnu / membre désactivé | 2 | INTRUSION / Personne inconnue |
+| ACC-03 | présence, pas encore de visage (< 8 s) | 0 | IDENTIFICATION / Regardez la camera |
+| ACC-04 | présence, aucun visage exploitable après 8 s | 1 | ALERTE PRESENCE / Non identifie |
+| ACC-05 | présence + visage connu mais `ir_temp` hors 28-42 °C (photo / écran) | 2 |
+| ACC-06 | présence + visage connu mais confiance < 0.80 | 1 | CONFIANCE TROP FAIBLE / Taux : <valeur>% | ACCES REFUSE / Chaleur absente |
+| ENV-01 | IA environnement : niveau 1 (anomalie, dérive) | 1 | ATTENTION / <catégorie> |
+| ENV-02 | IA environnement : niveau 2 (critique) | 2 | ALERTE DANGER / <catégorie> |
 
-Les scénarios Accès et Environnement sont indépendants : un membre autorisé présent pendant une fuite de gaz garde la LED verte, mais le buzzer et l'écran passent en alerte.
+Les scénarios Accès et Environnement sont indépendants : un membre autorisé présent pendant une fuite de gaz reste accepté, mais le buzzer et l'écran passent en alerte.
 
 ## Caméra pilotée par la présence (vision.py <-> backend <-> front)
 

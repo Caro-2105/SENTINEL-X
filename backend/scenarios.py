@@ -3,13 +3,14 @@ SENTINEL-X : moteur de scénarios ("stories").
 
 Ce module ne fait AUCUNE entrée/sortie (ni MQTT, ni base de données, ni caméra) :
 il reçoit l'état courant des capteurs, de la vision et de l'analyse IA environnementale,
-et renvoie une Décision (LED verte, buzzer, texte OLED) + les événements à journaliser.
+et renvoie une Décision (buzzer, texte OLED) + les événements à journaliser.
 Il est donc testable sans matériel (voir tests/test_scenarios.py) et rejouable avec simulator.py.
 
 Catalogue des stories
 ---------------------
 Accès (détecteur de présence + caméra + infrarouge) :
-  ACC-01  Membre reconnu + chaleur humaine      -> LED verte + "Bienvenue <nom>"
+  ACC-01  Membre reconnu (confiance >= 80 %) + chaleur humaine -> buzzer 0 + "Bienvenue <label>"
+  ACC-06  Membre reconnu mais confiance < 80 %  -> "CONFIANCE TROP FAIBLE" + la valeur du taux
   ACC-02  Visage inconnu                        -> buzzer + "INTRUSION"
   ACC-03  Présence, identification en cours     -> message d'attente (aucune alerte)
   ACC-04  Présence jamais identifiée (délai)    -> buzzer + "ALERTE PRESENCE"
@@ -28,11 +29,11 @@ from typing import Dict, List, Optional
 # --------------------------------------------------------------------------------------
 VISION_TTL_S = 5.0            # un résultat caméra est valable 5 s
 CAPTEURS_TTL_S = 10.0         # au-delà, on considère que l'ESP ne parle plus
-CONFIANCE_MIN = 0.70          # en dessous, un visage "connu" n'est pas accepté
+CONFIANCE_MIN = 0.80          # en dessous, un visage "connu" n'est pas accepté (message "confiance trop faible")
 IR_HUMAIN_MIN = 28.0          # plage de température de surface d'une peau (°C)
 IR_HUMAIN_MAX = 42.0
 DELAI_IDENTIFICATION_S = 8.0  # temps laissé à la caméra pour identifier une présence
-MAINTIEN_ACCES_S = 8.0        # la LED verte reste allumée après la dernière validation
+MAINTIEN_ACCES_S = 8.0        # le message "Bienvenue" reste affiché après la dernière validation
 FRAICHEUR_IR_S = 1.0          # la mesure IR ne doit pas être plus vieille que l'image du visage (désynchro caméra/ESP)
 COOLDOWN_EVENEMENT_S = 30.0   # anti-doublon dans le journal
 ECRAN_COLS = 21               # OLED 128x64, police 6x8
@@ -42,21 +43,23 @@ ECRAN_COLS = 21               # OLED 128x64, police 6x8
 # --------------------------------------------------------------------------------------
 SCENARIOS: Dict[str, dict] = {
     "IDLE":   dict(categorie="SYSTEME", libelle="Surveillance normale", severite="INFO",
-                   led_verte=False, buzzer=0, ligne1="SENTINEL-X", ligne2="Surveillance OK"),
+                   buzzer=0, ligne1="SENTINEL-X", ligne2="Surveillance OK"),
     "ACC-01": dict(categorie="ACCES", libelle="Membre de l'équipe reconnu et autorisé", severite="INFO",
-                   led_verte=True, buzzer=0, ligne1="ACCES AUTORISE", ligne2="Bienvenue {nom}"),
+                   buzzer=0, ligne1="ACCES AUTORISE", ligne2="Bienvenue {nom}"),
     "ACC-02": dict(categorie="ACCES", libelle="Intrusion : visage inconnu", severite="CRITICAL",
-                   led_verte=False, buzzer=2, ligne1="INTRUSION", ligne2="Personne inconnue"),
+                   buzzer=2, ligne1="INTRUSION", ligne2="Personne inconnue"),
     "ACC-03": dict(categorie="ACCES", libelle="Présence détectée, identification en cours", severite="INFO",
-                   led_verte=False, buzzer=0, ligne1="IDENTIFICATION", ligne2="Regardez la camera"),
+                   buzzer=0, ligne1="IDENTIFICATION", ligne2="Regardez la camera"),
     "ACC-04": dict(categorie="ACCES", libelle="Présence non identifiée (aucun visage exploitable)", severite="WARNING",
-                   led_verte=False, buzzer=1, ligne1="ALERTE PRESENCE", ligne2="Non identifie"),
+                   buzzer=1, ligne1="ALERTE PRESENCE", ligne2="Non identifie"),
     "ACC-05": dict(categorie="ACCES", libelle="Visage connu sans signature thermique humaine (usurpation)", severite="CRITICAL",
-                   led_verte=False, buzzer=2, ligne1="ACCES REFUSE", ligne2="Chaleur absente"),
+                   buzzer=2, ligne1="ACCES REFUSE", ligne2="Chaleur absente"),
+    "ACC-06": dict(categorie="ACCES", libelle="Visage reconnu mais confiance insuffisante", severite="WARNING",
+                   buzzer=1, ligne1="CONFIANCE TROP FAIBLE", ligne2="Taux : {conf}"),
     "ENV-01": dict(categorie="ENVIRONNEMENT", libelle="Anomalie environnementale détectée par l'IA", severite="WARNING",
-                   led_verte=False, buzzer=1, ligne1="ATTENTION", ligne2="{env}"),
+                   buzzer=1, ligne1="ATTENTION", ligne2="{env}"),
     "ENV-02": dict(categorie="ENVIRONNEMENT", libelle="Danger environnemental critique", severite="CRITICAL",
-                   led_verte=False, buzzer=2, ligne1="ALERTE DANGER", ligne2="{env}"),
+                   buzzer=2, ligne1="ALERTE DANGER", ligne2="{env}"),
 }
 
 ENV_TEXTES = {
@@ -69,9 +72,9 @@ ENV_TEXTES = {
 ENV_TEXTE_DEFAUT = "Anomalie capteurs"
 
 # Priorité d'affichage OLED quand plusieurs scénarios sont actifs (le plus prioritaire d'abord)
-PRIORITE_ECRAN = ["ENV-02", "ACC-02", "ACC-05", "ACC-04", "ENV-01", "ACC-01", "ACC-03", "IDLE"]
+PRIORITE_ECRAN = ["ENV-02", "ACC-02", "ACC-05", "ACC-04", "ACC-06", "ENV-01", "ACC-01", "ACC-03", "IDLE"]
 # Scénarios consignés dans le journal `evenement` (ACC-03 et IDLE sont transitoires)
-CODES_JOURNALISES = {"ACC-01", "ACC-02", "ACC-04", "ACC-05", "ENV-01", "ENV-02"}
+CODES_JOURNALISES = {"ACC-01", "ACC-02", "ACC-04", "ACC-05", "ACC-06", "ENV-01", "ENV-02"}
 
 
 # --------------------------------------------------------------------------------------
@@ -126,7 +129,6 @@ class Evenement:
 
 @dataclass
 class Decision:
-    led_verte: bool = False
     buzzer: int = 0                      # 0 off / 1 intermittent / 2 continu rapide
     ligne1: str = "SENTINEL-X"
     ligne2: str = "Surveillance OK"
@@ -136,8 +138,7 @@ class Decision:
 
     def commande(self) -> dict:
         """Payload publié sur `sentinel/commandes` (lu par le firmware ESP8266)."""
-        return {"led_verte": self.led_verte, "buzzer": self.buzzer,
-                "ligne1": self.ligne1, "ligne2": self.ligne2}
+        return {"buzzer": self.buzzer, "ligne1": self.ligne1, "ligne2": self.ligne2}
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -183,7 +184,7 @@ class MoteurScenarios:
         if not presence:
             self._presence_depuis = None
             if self._maintien and now < self._maintien[1]:
-                return self._maintien[0]              # on garde la LED verte quelques secondes
+                return self._maintien[0]              # on garde le message d'accueil quelques secondes
             self._maintien = None
             return None
 
@@ -195,9 +196,12 @@ class MoteurScenarios:
         if visage:
             fiche = membres.get(v.label) if v.label else None
             actif = fiche["actif"] if fiche else True          # inconnu en base mais "connu" du modèle -> auto-enregistré
+            if v.connu and actif and v.confiance < CONFIANCE_MIN:
+                self._maintien = None                    # reconnu par le modèle, mais pas assez sûr : pas d'accès
+                return _Acces("ACC-06", v.label, None, v.confiance)
             connu = v.connu and v.confiance >= CONFIANCE_MIN and actif
             if connu:
-                nom = fiche["nom"] if fiche else v.label
+                nom = v.label                            # l'écran affiche le label renvoyé par la reconnaissance faciale
                 if chaleur is False:
                     self._maintien = None
                     return _Acces("ACC-05", v.label, nom, v.confiance)
@@ -248,18 +252,18 @@ class MoteurScenarios:
         if not actifs:
             actifs = ["IDLE"]
 
-        # Combinaison des actionneurs : LED = accès OK ; buzzer = pire niveau ; écran = priorité
-        led = bool(acces and acces.code == "ACC-01")
+        # Combinaison des actionneurs : buzzer = pire niveau ; écran = priorité
         buzzer = max(SCENARIOS[c]["buzzer"] for c in actifs)
         principal = min(actifs, key=PRIORITE_ECRAN.index)
         modele = SCENARIOS[principal]
         env_txt = ENV_TEXTES.get(env.categorie, ENV_TEXTE_DEFAUT) if env else ""
         nom = acces.nom if acces else None
-        fmt = dict(nom=nom or "", env=env_txt)
+        conf = f"{round(acces.confiance * 100)}%" if acces and acces.confiance is not None else ""
+        fmt = dict(nom=nom or "", env=env_txt, conf=conf)
         ligne1 = ecran(modele["ligne1"].format(**fmt))
         ligne2 = ecran(modele["ligne2"].format(**fmt))
 
-        decision = Decision(led_verte=led, buzzer=buzzer, ligne1=ligne1, ligne2=ligne2,
+        decision = Decision(buzzer=buzzer, ligne1=ligne1, ligne2=ligne2,
                             scenarios=actifs, nom=nom)
 
         # Journal : on n'émet un événement qu'à l'apparition d'un scénario (pas à chaque message)

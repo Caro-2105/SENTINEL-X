@@ -30,43 +30,56 @@ class TestAcces(unittest.TestCase):
     def ev(self, now, c, v, env=None):
         return self.m.evaluer(c, v, env, MEMBRES, now)
 
-    def test_membre_autorise_led_verte_et_message(self):
+    def test_membre_autorise_buzzer_0_et_label(self):
         d = self.ev(100, cap(100), vis(100))
         self.assertEqual(d.scenarios, ["ACC-01"])
-        self.assertTrue(d.led_verte)
         self.assertEqual(d.buzzer, 0)
-        self.assertEqual((d.ligne1, d.ligne2), ("ACCES AUTORISE", "Bienvenue Alice"))
+        self.assertEqual((d.ligne1, d.ligne2), ("ACCES AUTORISE", "Bienvenue alice"))   # label renvoyé par la reco faciale
         self.assertEqual([e.code for e in d.evenements], ["ACC-01"])
+
+    def test_plus_de_led_dans_la_commande(self):
+        d = self.ev(100, cap(100), vis(100))
+        self.assertEqual(set(d.commande()), {"buzzer", "ligne1", "ligne2"})
+        self.assertFalse(hasattr(d, "led_verte"))
 
     def test_membre_autorise_sans_capteur_ir(self):
         d = self.ev(100, cap(100, ir=None), vis(100))       # repli : le PIR (infrarouge passif) suffit
-        self.assertTrue(d.led_verte)
+        self.assertEqual(d.scenarios, ["ACC-01"])
 
     def test_visage_seul_sans_presence_n_autorise_pas(self):
         d = self.ev(100, cap(100, presence=0), vis(100))
-        self.assertFalse(d.led_verte)
         self.assertEqual(d.scenarios, ["IDLE"])
 
     def test_inconnu_intrusion(self):
         d = self.ev(100, cap(100), vis(100, "inconnu", 0.4, False))
         self.assertEqual(d.scenarios, ["ACC-02"])
-        self.assertFalse(d.led_verte)
         self.assertEqual(d.buzzer, 2)
         self.assertEqual(d.ligne1, "INTRUSION")
 
-    def test_confiance_trop_faible_refusee(self):
-        d = self.ev(100, cap(100), vis(100, "alice", 0.5, True))
-        self.assertEqual(d.scenarios, ["ACC-02"])
+    def test_confiance_trop_faible_affiche_le_taux(self):
+        d = self.ev(100, cap(100), vis(100, "alice", 0.72, True))
+        self.assertEqual(d.scenarios, ["ACC-06"])
+        self.assertEqual((d.ligne1, d.ligne2), ("CONFIANCE TROP FAIBLE", "Taux : 72%"))
+        self.assertEqual([e.code for e in d.evenements], ["ACC-06"])
+
+    def test_seuil_de_confiance_80(self):
+        self.assertEqual(self.ev(100, cap(100), vis(100, "alice", 0.80, True)).scenarios, ["ACC-01"])
+        self.m = MoteurScenarios()
+        d = self.ev(100, cap(100), vis(100, "alice", 0.79, True))
+        self.assertEqual((d.scenarios, d.ligne2), (["ACC-06"], "Taux : 79%"))
+
+    def test_confiance_faible_ne_garde_pas_l_acces_precedent(self):
+        self.ev(100, cap(100), vis(100, "alice", 0.93, True))
+        d = self.ev(101, cap(101), vis(101, "alice", 0.6, True))
+        self.assertEqual(d.scenarios, ["ACC-06"])
 
     def test_membre_desactive_refuse(self):
         d = self.ev(100, cap(100), vis(100, "bob", 0.95, True))
         self.assertEqual(d.scenarios, ["ACC-02"])
-        self.assertFalse(d.led_verte)
 
     def test_usurpation_visage_sans_chaleur(self):
         d = self.ev(100, cap(100, ir=21.0), vis(100))
         self.assertEqual(d.scenarios, ["ACC-05"])
-        self.assertFalse(d.led_verte)
         self.assertEqual(d.buzzer, 2)
 
     def test_presence_sans_visage_attente_puis_alerte(self):
@@ -85,12 +98,12 @@ class TestAcces(unittest.TestCase):
         d = self.ev(100, cap(100), vis(100 - VISION_TTL_S - 1))
         self.assertEqual(d.scenarios, ["ACC-03"])
 
-    def test_maintien_led_verte_puis_extinction(self):
+    def test_maintien_du_message_puis_retour_normal(self):
         self.ev(100, cap(100), vis(100))
-        d = self.ev(103, cap(103, presence=0), None)          # PIR retombé, LED maintenue
-        self.assertTrue(d.led_verte)
+        d = self.ev(103, cap(103, presence=0), None)          # PIR retombé, message d'accueil maintenu
+        self.assertEqual(d.scenarios, ["ACC-01"])
         d = self.ev(100 + MAINTIEN_ACCES_S + 1, cap(100 + MAINTIEN_ACCES_S + 1, presence=0), None)
-        self.assertFalse(d.led_verte)
+        self.assertEqual(d.scenarios, ["IDLE"])
 
     def test_un_seul_evenement_par_apparition(self):
         n = 0
@@ -102,7 +115,6 @@ class TestAcces(unittest.TestCase):
         # trame ESP de t=98, visage de t=100 : on n'autorise pas sur une mesure IR plus vieille que le visage
         d = self.ev(100, cap(98), vis(100))
         self.assertEqual(d.scenarios, ["ACC-03"])
-        self.assertFalse(d.led_verte)
         self.assertEqual(d.evenements, [])
         d = self.ev(101, cap(101), vis(100))             # trame fraîche reçue : autorisation
         self.assertEqual(d.scenarios, ["ACC-01"])
@@ -117,7 +129,7 @@ class TestCombinaison(unittest.TestCase):
         m = MoteurScenarios()
         env = EnvResult(2, 0.95, "gaz", "gaz 700", "test")
         d = m.evaluer(cap(100, g=700), vis(100), env, MEMBRES, 100)
-        self.assertTrue(d.led_verte)                  # l'accès reste autorisé
+        self.assertIn("ACC-01", d.scenarios)          # l'accès reste autorisé
         self.assertEqual(d.buzzer, 2)                 # mais l'alarme sonne
         self.assertEqual((d.ligne1, d.ligne2), ("ALERTE DANGER", "Fuite de gaz"))
         self.assertEqual(sorted(e.code for e in d.evenements), ["ACC-01", "ENV-02"])
@@ -126,7 +138,6 @@ class TestCombinaison(unittest.TestCase):
         m = MoteurScenarios()
         d = m.evaluer(cap(100, presence=0), None, EnvResult(1, 0.4, "derive", "", "x"), MEMBRES, 100)
         self.assertEqual((d.buzzer, d.ligne1, d.ligne2), (1, "ATTENTION", "Derive suspecte"))
-        self.assertFalse(d.led_verte)
 
 
 if __name__ == "__main__":

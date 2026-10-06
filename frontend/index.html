@@ -19,8 +19,6 @@
         .oled { background: #000; border: 2px solid #475569; border-radius: 6px; padding: 6px 12px; font-family: 'Courier New', monospace; min-width: 230px; }
         .oled .l1 { font-weight: bold; letter-spacing: 1px; }
         .oled .l2 { font-size: .85rem; color: var(--mut); }
-        .led { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--line); margin-right: 6px; vertical-align: middle; }
-        .led.on { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
 
         nav { display: flex; gap: 6px; margin-bottom: 14px; }
         nav button { background: var(--card); color: var(--mut); border: 0; border-radius: 8px 8px 0 0; padding: 10px 18px; font-size: 1rem; cursor: pointer; }
@@ -64,10 +62,9 @@
         <span id="liaison" class="badge off">Backend : connexion…</span>
     </header>
 
-    <!-- Ce que fait l'ESP8266 en ce moment (écran, LED, buzzer) -->
+    <!-- Ce que fait l'ESP8266 en ce moment (écran, buzzer) -->
     <div class="esp">
         <div class="oled"><div class="l1" id="oled-l1">SENTINEL-X</div><div class="l2" id="oled-l2">Surveillance OK</div></div>
-        <span><span id="led-verte" class="led"></span>LED verte</span>
         <span id="buzzer-etat" class="badge ok">SILENCIEUX</span>
         <span id="scenarios-actifs" class="badge off">IDLE</span>
     </div>
