@@ -25,6 +25,30 @@
         nav button.active { color: var(--txt); box-shadow: inset 0 -3px 0 var(--acc); }
         .tab { display: none; } .tab.active { display: block; }
 
+        /* Mire d'authentification */
+        .login { min-height: 90vh; display: flex; align-items: center; justify-content: center; }
+        .login[hidden], #app[hidden] { display: none; }
+        .login-card { width: 100%; max-width: 420px; padding: 28px 26px; text-align: center; }
+        .login-card h1 { margin: 0 0 4px; letter-spacing: 3px; color: var(--acc); font-size: 1.6rem; }
+        .login-card .sous { color: var(--mut); margin: 0 0 18px; font-size: .9rem; }
+        .etapes { display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; }
+        .etape { padding: 5px 12px; border-radius: 20px; background: var(--line); color: var(--mut); font-size: .85rem; }
+        .etape.actif { background: var(--acc); color: #04293a; font-weight: 600; }
+        .etape.fait { background: var(--ok); color: #fff; }
+        .scan { position: relative; width: 120px; height: 120px; margin: 0 auto 14px; border: 2px solid var(--acc); border-radius: 14px; overflow: hidden; }
+        .scan::before { content: ''; position: absolute; inset: 22px 30px; border: 2px solid var(--line); border-radius: 50% 50% 46% 46%; }
+        .scan-bar { position: absolute; left: 0; right: 0; height: 3px; background: var(--acc); box-shadow: 0 0 12px var(--acc); animation: scan 1.8s ease-in-out infinite alternate; }
+        @keyframes scan { from { top: 0; } to { top: calc(100% - 3px); } }
+        .login-cam { width: 100%; aspect-ratio: 3 / 2; background: #000; border: 2px solid var(--acc); border-radius: 12px; overflow: hidden; margin: 0 auto 14px; }
+        .login-cam img { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }  /* effet miroir : plus naturel */
+        .progress { height: 6px; background: var(--line); border-radius: 3px; margin: 12px 0 16px; overflow: hidden; }
+        .progress > div { height: 100%; width: 0; background: var(--ok); transition: width .3s; }
+        #login-msg { min-height: 1.4em; margin: 0; }
+        .login-card input { width: 100%; padding: 12px; margin: 8px 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--txt); font-size: 1rem; }
+        .login-card input:focus { outline: 2px solid var(--acc); }
+        .err { color: #fb7185; min-height: 1.4em; margin: 10px 0 0; }
+        .user { color: var(--mut); font-size: .9rem; }
+
         .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 14px; }
         .tile { background: var(--card); border-radius: 10px; padding: 12px 14px; }
         .tile .k { color: var(--mut); font-size: .8rem; margin-bottom: 6px; }
@@ -56,10 +80,42 @@
     </style>
 </head>
 <body>
-<div class="wrap">
+<!-- ===== Mire d'authentification : 1) visage, 2) mot de passe ===== -->
+<div id="login" class="login">
+    <div class="card login-card">
+        <h1>SENTINEL-X</h1>
+        <p class="sous">Accès réservé à l'équipe</p>
+        <div class="etapes"><span id="etape1" class="etape actif">1 · Visage</span><span id="etape2" class="etape">2 · Mot de passe</span></div>
+
+        <div id="login-visage">
+            <div id="login-cam-box" class="login-cam" hidden><img id="login-cam" alt="Aperçu de la caméra"></div>
+            <div id="login-scan" class="scan"><div class="scan-bar"></div></div>
+            <p id="login-msg">Connexion au serveur…</p>
+            <div class="progress"><div id="login-prog"></div></div>
+            <button id="login-retry" class="btn" type="button" hidden>Recommencer</button>
+        </div>
+
+        <form id="login-form" hidden autocomplete="on">
+            <p id="login-salut" style="font-size:1.1rem;margin:0"></p>
+            <input id="login-mdp" type="password" placeholder="Mot de passe" autocomplete="current-password" maxlength="256" required>
+            <button class="btn" type="submit" id="login-ok">Se connecter</button>
+        </form>
+        <div id="login-dev" hidden style="margin-top:14px">
+            <button class="btn" type="button" id="login-dev-btn">Entrer (mode dev, sans authentification)</button>
+            <p class="sous" style="margin:8px 0 0"><a href="#" id="login-dev-visage">Utiliser plutôt la connexion par visage</a></p>
+        </div>
+        <p id="login-err" class="err"></p>
+    </div>
+</div>
+
+<div class="wrap" id="app" hidden>
     <header>
         <h1>SENTINEL-X</h1>
-        <span id="liaison" class="badge off">Backend : connexion…</span>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span id="liaison" class="badge off">Backend : connexion…</span>
+            <span class="user" id="user-nom"></span>
+            <button id="logout-btn" class="btn sec" type="button" style="padding:6px 12px;font-size:.85rem">Déconnexion</button>
+        </div>
     </header>
 
     <!-- Ce que fait l'ESP8266 en ce moment (écran, buzzer) -->
@@ -71,17 +127,18 @@
 
     <nav>
         <button data-tab="capteurs" class="active">Capteurs</button>
-        <button data-tab="camera">Caméra</button>
+        <button data-tab="camera">Caméra porte</button>
         <button data-tab="evenements">Événements</button>
     </nav>
 
     <!-- ===== Capteurs ===== -->
     <section id="tab-capteurs" class="tab active">
         <div class="tiles">
+            <div class="tile"><div class="k">Température</div><span id="status-temp" class="badge off">—</span></div>
+            <div class="tile"><div class="k">Humidité</div><span id="status-hum" class="badge off">—</span></div>
             <div class="tile"><div class="k">Détecteur de présence</div><span id="status-pir" class="badge off">—</span></div>
             <div class="tile"><div class="k">Gaz / fumée</div><span id="status-gas" class="badge off">—</span></div>
             <div class="tile"><div class="k">Analyse IA environnement</div><span id="env-ia" class="badge off">—</span></div>
-            <div class="tile"><div class="k">Dernier badge RFID</div><span id="status-rfid" class="badge off">AUCUN</span></div>
         </div>
         <div class="grid2">
             <div class="card"><h2>Température et humidité</h2><div class="chart-box"><canvas id="envChart"></canvas></div></div>

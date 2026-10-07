@@ -81,8 +81,8 @@ CLASSES = {"normal": 0, "anomalie": 1, "critique": 2}
 #   var_mode             : "abs" (en unité de la mesure, ex. °C) ou "pct" (en % de la minute précédente)
 # --------------------------------------------------------------------------------------
 CONFIG = {
-    "temperature": dict(unite="°C", min=0.0, max=28.0, alerte_min=10.0, alerte_max=25.0,
-                        var_max=1.0, var_mode="abs"),
+    "temperature": dict(unite="°C", min=0.0, max=40.0, alerte_min=10.0, alerte_max=35.0,
+                        var_max=3.0, var_mode="abs"),
     "humidite":    dict(unite="%", min=30.0, max=80.0, alerte_min=35.0, alerte_max=65.0,
                         var_max=10.0, var_mode="pct"),
     # Gaz : valeurs PROVISOIRES (à ajuster), à ajuster quand les seuils seront connus.

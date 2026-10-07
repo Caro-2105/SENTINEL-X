@@ -110,3 +110,13 @@ La caméra n'est allumée que si le PIR est actif (maintien 10 s après la derni
 API : `POST /api/camera` `{"action": "on"|"auto"}` ; `GET /api/status` contient `camera` (`en_ligne` = false si aucun état reçu depuis 5 s).
 Le flux MJPEG (`/stream`, `/snapshot.jpg`) n'écoute que sur 127.0.0.1 : il n'est visible que depuis le PC qui exécute vision.py.
 Variables : `CAMERA_INDEX` (défaut 1), `CAMERA_STREAM_PORT` (8001), `FACE_WINDOW=1` pour garder aussi la fenêtre OpenCV.
+
+## Webcam du poste (authentification du tableau de bord, vision_poste.py)
+
+Séparée de la caméra de la porte : ces messages n'alimentent jamais les scénarios d'accès.
+
+| Topic | Sens | Payload |
+|---|---|---|
+| `sentinel/poste/cmd` | backend -> vision_poste.py | `{"action": "on"}` (bail de 90 s, renouvelé à chaque demande) ou `{"action": "off"}` |
+| `sentinel/poste/vision` | vision_poste.py -> backend | `{"label", "confiance", "connu", "visages"}` (même format que `sentinel/vision`) |
+| `sentinel/poste/state` | vision_poste.py -> backend (1/s) | `{"actif": bool, "erreur": str\|null, "flux": "http://127.0.0.1:8101/stream?k=<clé>"}` |

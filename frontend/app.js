@@ -1,5 +1,5 @@
 // 127.0.0.1 et non "localhost" : sous Windows, "localhost" essaie d'abord l'IPv6 (::1), d'où des délais de 0,3 à 2 s.
-const API = 'http://127.0.0.1:8000';
+const API = location.protocol.startsWith('http') ? location.origin : 'http://127.0.0.1:8000';
 const FENETRE_S = 90;            // les courbes montrent les 90 dernières secondes
 const $ = (id) => document.getElementById(id);
 const BUZZER_TXT = { 0: 'SILENCIEUX', 1: 'BIP INTERMITTENT', 2: 'ALARME CONTINUE' };
@@ -34,6 +34,19 @@ const COMMUN = {
     plugins: { tooltip: { callbacks: { title: (items) => hms(items[0].parsed.x) } } },
     elements: { line: { tension: 0 }, point: { radius: 0, hoverRadius: 4 } },
 };
+// ---------------------------------------------------------------- Session
+let token = null;
+try { token = sessionStorage.getItem('sx_token'); } catch (e) { /* stockage indisponible : on se reconnectera */ }
+
+// Appel à l'API avec le jeton de session ; un 401 renvoie à la mire de connexion.
+async function api(chemin, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const r = await fetch(API + chemin, { ...options, headers });
+    if (r.status === 401 && token) { deconnecter(false); throw new Error('session expirée'); }
+    return r;
+}
+
 const hms = (t) => new Date(t * 1000).toLocaleTimeString('fr-FR');
 const X_AXIS = {
     type: 'linear',
@@ -90,8 +103,9 @@ function initCharts() {
 }
 
 async function fetchHistorique() {
+    if (!token) return;
     try {
-        const { history } = await (await fetch(`${API}/api/data/history?limit=60`)).json();
+        const { history } = await (await api(`/api/data/history?limit=60`)).json();
         if (!history.length) return;
         const signature = history[history.length - 1].timestamp;
         if (signature === derniereSignature) return;      // aucune nouvelle mesure : on ne touche à rien
@@ -137,12 +151,13 @@ function majBandeauEsp(d) {
 function majTuiles(c, env) {
     const frais = c && (Date.now() / 1000 - c.ts) < PERIME_S;
     if (!frais) {
-        ['status-pir', 'status-gas'].forEach(id => setBadge($(id), 'PAS DE DONNÉES', 'off'));
+        ['status-temp', 'status-hum', 'status-pir', 'status-gas'].forEach(id => setBadge($(id), 'PAS DE DONNÉES', 'off'));
     } else {
+        setBadge($('status-temp'), c.temperature == null ? '—' : c.temperature.toFixed(1) + ' °C', 'ok');
+        setBadge($('status-hum'), c.humidite == null ? '—' : Math.round(c.humidite) + ' %', 'ok');
         setBadge($('status-pir'), c.presence === 1 ? 'PRÉSENCE' : 'RAS', c.presence === 1 ? 'warn' : 'ok');
         const g = c.gaz;
         setBadge($('status-gas'), g === null ? '—' : `${Math.round(g)}`, g >= 600 ? 'bad' : g >= 400 ? 'warn' : 'ok');
-        if (c.rfid_uid) setBadge($('status-rfid'), c.rfid_uid, 'off');
     }
     const ia = $('env-ia');
     if (env && env.niveau > 0) {
@@ -188,7 +203,7 @@ function majCamera(camBrute, vision) {
         camDemande = forcee ? 'auto' : null;
         if (!img.dataset.on) {
             img.dataset.on = '1';
-            img.src = cam.flux + '?t=' + Date.now();
+            img.src = cam.flux + '&t=' + Date.now();
         }
     } else {
         setBadge($('cam-badge'), 'ÉTEINTE', 'off');
@@ -220,10 +235,10 @@ function majCamera(camBrute, vision) {
 }
 
 async function envoyerCommandeCamera() {
-    if (!camDemande) return;
+    if (!camDemande || !token) return;
     $('cam-btn').disabled = true;
     try {
-        await fetch(`${API}/api/camera`, {
+        await api(`/api/camera`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: camDemande }),
@@ -235,9 +250,10 @@ async function envoyerCommandeCamera() {
 }
 
 async function fetchStatus() {
+    if (!token) return;
     try {
         const t0 = performance.now();
-        const st = await (await fetch(`${API}/api/status`)).json();
+        const st = await (await api(`/api/status`)).json();
         const ms = Math.round(performance.now() - t0);
         setBadge($('liaison'), `Backend : en ligne (${ms} ms)`, ms > 500 ? 'warn' : 'ok');
         majBandeauEsp(st.decision);
@@ -250,8 +266,9 @@ async function fetchStatus() {
 
 // ---------------------------------------------------------------- Journal des événements
 async function fetchEvents() {
+    if (!token) return;
     try {
-        const { events } = await (await fetch(`${API}/api/events?limit=30`)).json();
+        const { events } = await (await api(`/api/events?limit=30`)).json();
         const sig = JSON.stringify(events.map(e => [e.id_evenement, e.acquitte]));
         if (sig === derniereSigEvents) return;
         derniereSigEvents = sig;
@@ -270,7 +287,7 @@ async function fetchEvents() {
                 b.className = 'ack-btn';
                 b.textContent = 'Acquitter';
                 b.onclick = async () => {
-                    await fetch(`${API}/api/events/${e.id_evenement}/ack`, { method: 'POST' });
+                    await api(`/api/events/${e.id_evenement}/ack`, { method: 'POST' });
                     fetchEvents();
                 };
                 tr.children[3].appendChild(b);
@@ -282,20 +299,188 @@ async function fetchEvents() {
     }
 }
 
+// ---------------------------------------------------------------- Mire d'authentification
+let loginId = null, loginSeq = 0;
+
+function apercuLogin(url) {
+    const img = $('login-cam');
+    if (url && !img.dataset.on) {
+        img.dataset.on = '1';
+        img.src = url + '&t=' + Date.now();
+    } else if (!url && img.dataset.on) {
+        img.dataset.on = '';
+        img.removeAttribute('src');
+    }
+    $('login-cam-box').hidden = !url;
+    $('login-scan').hidden = !!url;
+}
+
+function etapeLogin(n) {
+    if (n !== 1) apercuLogin(null);
+    $('etape1').className = 'etape ' + (n === 1 ? 'actif' : 'fait');
+    $('etape2').className = 'etape ' + (n === 2 ? 'actif' : '');
+    $('login-visage').hidden = n !== 1;
+    $('login-form').hidden = n !== 2;
+}
+
+function messageLogin(texte, erreur = false) {
+    $('login-msg').textContent = texte;
+    $('login-err').textContent = erreur ? texte : '';
+}
+
+async function demarrerLogin() {
+    const seq = ++loginSeq;                       // invalide les relevés d'une tentative précédente
+    loginId = null;
+    etapeLogin(1);
+    $('login-retry').hidden = true;
+    $('login-prog').style.width = '0%';
+    $('login-err').textContent = '';
+    $('login-mdp').value = '';
+    messageLogin('Connexion au serveur…');
+    try {
+        const r = await fetch(`${API}/api/auth/face/start`, { method: 'POST' });
+        loginId = (await r.json()).login_id;
+        suivreVisage(seq);
+    } catch (e) {
+        messageLogin('Serveur injoignable : lancer « python main.py ».');
+        setTimeout(() => { if (seq === loginSeq && !token) demarrerLogin(); }, 3000);
+    }
+}
+
+async function suivreVisage(seq) {
+    if (seq !== loginSeq || token) return;
+    try {
+        const st = await (await fetch(`${API}/api/auth/face/${loginId}`)).json();
+        if (seq !== loginSeq) return;
+        if (st.etape === 'mot_de_passe') {
+            etapeLogin(2);
+            $('login-salut').textContent = `Bonjour ${st.utilisateur}`;
+            $('login-mdp').focus();
+            return;                                // fin du suivi : on attend le mot de passe
+        }
+        if (st.etape === 'expire') {
+            apercuLogin(null);
+            messageLogin(st.message);
+            $('login-retry').hidden = false;
+            return;
+        }
+        messageLogin(st.message);
+        apercuLogin(st.apercu || null);
+        $('login-prog').style.width = Math.round((st.progression || 0) * 100) + '%';
+    } catch (e) {
+        messageLogin('Serveur injoignable…');
+    }
+    setTimeout(() => suivreVisage(seq), 400);
+}
+
+async function envoyerMotDePasse(ev) {
+    ev.preventDefault();
+    const bouton = $('login-ok');
+    bouton.disabled = true;
+    $('login-err').textContent = '';
+    try {
+        const r = await fetch(`${API}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ login_id: loginId, mot_de_passe: $('login-mdp').value }),
+        });
+        const corps = await r.json();
+        if (r.ok) {
+            token = corps.token;
+            try { sessionStorage.setItem('sx_token', token); } catch (e) { /* ignoré */ }
+            $('login-mdp').value = '';
+            entrer(corps.utilisateur);
+            return;
+        }
+        const d = corps.detail || {};
+        $('login-err').textContent = d.message || 'Connexion refusée.';
+        $('login-mdp').value = '';
+        if (d.code === 'face_requise' || d.code === 'verrouille' || d.code === 'sans_mot_de_passe') {
+            setTimeout(demarrerLogin, d.code === 'verrouille' ? Math.min((d.retry_after || 5) * 1000, 4000) : (d.code === 'sans_mot_de_passe' ? 6000 : 1500));
+        } else {
+            $('login-mdp').focus();
+        }
+    } catch (e) {
+        $('login-err').textContent = 'Serveur injoignable.';
+    } finally {
+        bouton.disabled = false;
+    }
+}
+
+function entrer(nom) {
+    $('login').hidden = true;
+    $('app').hidden = false;
+    $('user-nom').textContent = nom || '';
+    derniereSignature = null; derniereSigEvents = null;
+    envChart.resize(); gasChart.resize();
+    fetchStatus(); fetchHistorique(); fetchEvents();
+}
+
+async function deconnecter(prevenirServeur = true) {
+    const ancien = token;
+    token = null;
+    try { sessionStorage.removeItem('sx_token'); } catch (e) { /* ignoré */ }
+    if (prevenirServeur && ancien) {
+        try { await fetch(`${API}/api/auth/logout`, { method: 'POST', headers: { Authorization: 'Bearer ' + ancien } }); } catch (e) { /* ignoré */ }
+    }
+    $('app').hidden = true;
+    $('login').hidden = false;
+    camStable = null;
+    demarrerLogin();
+}
+
 // ---------------------------------------------------------------- Démarrage
 // Relance la tâche seulement quand la précédente est terminée : pas d'empilement de requêtes si le backend ralentit.
 async function boucle(tache, periodeMs) {
     try { await tache(); } finally { setTimeout(() => boucle(tache, periodeMs), periodeMs); }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initCharts();
     document.querySelectorAll('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
     $('cam-btn').onclick = envoyerCommandeCamera;
+    $('logout-btn').onclick = () => deconnecter(true);
+    $('login-form').onsubmit = envoyerMotDePasse;
+    $('login-retry').onclick = demarrerLogin;
     const depart = location.hash.slice(1);
     if (['capteurs', 'camera', 'evenements'].includes(depart)) showTab(depart);
 
     boucle(fetchStatus, 1000);
     boucle(fetchHistorique, 2000);
     boucle(fetchEvents, 3000);
+
+    // Session déjà ouverte dans cet onglet ? (le serveur reste seul juge de sa validité)
+    if (token) {
+        try {
+            const r = await fetch(`${API}/api/auth/me`, { headers: { Authorization: 'Bearer ' + token } });
+            if (r.ok) { entrer((await r.json()).utilisateur); return; }
+        } catch (e) { /* serveur absent : mire de connexion */ }
+        token = null;
+        try { sessionStorage.removeItem('sx_token'); } catch (e) { /* ignoré */ }
+    }
+    // Mode développeur (serveur lancé avec --dev) : entrée directe, sans caméra
+    let dev = false;
+    try { dev = !!(await (await fetch(`${API}/api/health`)).json()).dev; } catch (e) { /* serveur absent */ }
+    if (dev) {
+        $('login-visage').hidden = true;
+        $('login-dev').hidden = false;
+        $('login-dev-btn').onclick = async () => {
+            try {
+                const r = await fetch(`${API}/api/auth/dev`, { method: 'POST' });
+                if (!r.ok) { $('login-err').textContent = 'Mode dev indisponible.'; return; }
+                const d = await r.json();
+                token = d.token;
+                try { sessionStorage.setItem('sx_token', token); } catch (e) { /* ignoré */ }
+                entrer(d.utilisateur);
+            } catch (e) { $('login-err').textContent = 'Serveur injoignable.'; }
+        };
+        $('login-dev-visage').onclick = (ev) => {
+            ev.preventDefault();
+            $('login-dev').hidden = true;
+            $('login-visage').hidden = false;
+            demarrerLogin();
+        };
+        return;
+    }
+    demarrerLogin();
 });

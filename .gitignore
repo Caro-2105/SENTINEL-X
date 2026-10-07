@@ -23,3 +23,5 @@ archives/
 .vscode/
 .DS_Store
 Thumbs.db
+# Réglage des caméras propre à chaque PC
+backend/camera_config.json

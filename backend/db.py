@@ -118,6 +118,8 @@ def init_db():
             cree_le     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Authentification du tableau de bord : hachage scrypt du mot de passe (jamais en clair)
+    cur.execute("ALTER TABLE membre ADD COLUMN IF NOT EXISTS mot_de_passe_hash TEXT")
     cur.execute('''
         CREATE TABLE IF NOT EXISTS scenario (
             code_scenario VARCHAR(10) PRIMARY KEY,
@@ -198,7 +200,12 @@ def get_latest_data(limit=50):
         return []
 
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT * FROM sensor_data ORDER BY timestamp DESC LIMIT %s", (limit,))
+    # `timestamp` est stocké SANS fuseau (heure de la base, UTC dans Docker) : on le renvoie AVEC fuseau, sinon le
+    # navigateur l'interprète en heure locale et les courbes ont 1 à 2 h de décalage.
+    cur.execute(
+        "SELECT id, (timestamp AT TIME ZONE current_setting('TimeZone')) AS timestamp, temperature, humidite, "
+        "       gaz, presence, rfid_uid, ir_temp "
+        "FROM sensor_data ORDER BY sensor_data.timestamp DESC LIMIT %s", (limit,))
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -295,7 +302,7 @@ def get_evenements(limit=50):
         return []
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute(
-        "SELECT e.id_evenement, e.horodatage, e.code_scenario, s.libelle, s.severite, "
+        "SELECT e.id_evenement, (e.horodatage AT TIME ZONE current_setting('TimeZone')) AS horodatage, e.code_scenario, s.libelle, s.severite, "
         "       m.nom_affiche AS membre, e.categorie_env, e.score_ia, e.modele_ia, "
         "       e.message_ecran, e.instantane, e.acquitte "
         "FROM evenement e "
@@ -323,3 +330,46 @@ def acquitter_evenement(id_evenement):
     cur.close()
     conn.close()
     return ok
+
+
+# ----------------------------------------------------------------------------------
+# Authentification du tableau de bord
+# ----------------------------------------------------------------------------------
+def get_mot_de_passe_hash(label_ia):
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    cur = conn.cursor()
+    cur.execute("SELECT mot_de_passe_hash FROM membre WHERE label_ia = %s AND actif", (label_ia,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else None
+
+
+def set_mot_de_passe_hash(label_ia, hachage, nom_affiche=None):
+    """Crée le membre s'il n'existe pas, puis enregistre son hachage. Renvoie False si la base est indisponible."""
+    conn = get_db_connection()
+    if conn is None:
+        return False
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO membre (label_ia, nom_affiche, mot_de_passe_hash) VALUES (%s, %s, %s) "
+        "ON CONFLICT (label_ia) DO UPDATE SET mot_de_passe_hash = EXCLUDED.mot_de_passe_hash",
+        (label_ia, (nom_affiche or label_ia)[:40], hachage))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return True
+
+
+def list_membres_auth():
+    conn = get_db_connection()
+    if conn is None:
+        return []
+    cur = conn.cursor()
+    cur.execute("SELECT label_ia, actif, mot_de_passe_hash IS NOT NULL FROM membre ORDER BY label_ia")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows

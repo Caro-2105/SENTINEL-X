@@ -1,6 +1,6 @@
 paho-mqtt==1.6.1
 scikit-learn
-numpy
+numpy>=2
 pandas
 orange3==3.40.0
 opencv-python

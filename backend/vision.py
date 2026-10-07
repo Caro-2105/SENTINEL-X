@@ -1,5 +1,6 @@
 """
-SENTINEL-X : reconnaissance des membres de l'équipe par la webcam.
+SENTINEL-X : reconnaissance des membres de l'équipe par la caméra du BOÎTIER (porte).
+(La webcam du PC, qui sert à l'authentification du tableau de bord, est gérée par vision_poste.py.)
 
 Chaîne :
     image de la webcam  ->  embedding (2048 valeurs)  ->  réseau de neurones Orange  ->  5 classes
@@ -20,15 +21,19 @@ Prérequis : NumPy >= 2, Orange3, Orange3-ImageAnalytics, PyQt5, opencv-python >
 import json
 import os
 import pickle
+import secrets
 import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")   # ouverture caméra rapide sous Windows
 import cv2
 import numpy as np
 import paho.mqtt.client as mqtt
 from Orange.data import Table, Domain
+
+import cameras
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -49,13 +54,16 @@ PERIODE_ANALYSE_S = 1.0
 TAILLE_IMAGE = (720, 480)     # redimensionnement systématique avant analyse
 SEUIL_VISAGE = 0.7            # score minimal de détection YuNet
 
-CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "1"))        # 0 = webcam par défaut, 1 = seconde caméra
+# Caméra de la PORTE : variable CAMERA_INDEX > camera_config.json > 1. Réglage : python vision.py --choisir
+CAMERA_INDEX = cameras.index("porte", defaut=1, env="CAMERA_INDEX")
 FLUX_PORT = int(os.getenv("CAMERA_STREAM_PORT", "8001"))
 FLUX_FPS = 15                 # cadence du flux envoyé au front
 AFFICHER_FENETRE = os.getenv("FACE_WINDOW", "0") == "1"   # fenêtre OpenCV en plus du front
 MQTT_TOPIC_CAPTEURS = "sentinel/sensors/#"
 MQTT_TOPIC_CAMERA_ETAT = "sentinel/camera/state"
 MQTT_TOPIC_CAMERA_CMD = "sentinel/camera/cmd"
+MQTT_TOPIC_POSTE_CMD = "sentinel/poste/cmd"       # connexion en cours au tableau de bord (vision_poste.py)
+POSTE_BAIL_S = 180.0                              # même bail que vision_poste.py
 PIR_MAINTIEN_S = 10.0         # la caméra reste allumée 10 s après la dernière détection de présence
 MANUEL_MAX_S = 300.0          # un allumage forcé depuis le front s'éteint seul au bout de 5 min
 
@@ -208,7 +216,7 @@ class Flux:
         self.mettre(None)
 
 
-def demarrer_serveur_flux(flux):
+def demarrer_serveur_flux(flux, cle, port_depart=None):
     """Sert l'image en MJPEG sur 127.0.0.1 (jamais exposée au réseau : c'est une caméra)."""
 
     class Handler(BaseHTTPRequestHandler):
@@ -216,7 +224,11 @@ def demarrer_serveur_flux(flux):
             pass
 
         def do_GET(self):
-            chemin = self.path.split("?")[0]
+            chemin, _, requete = self.path.partition("?")
+            fournie = dict(p.split("=", 1) for p in requete.split("&") if "=" in p).get("k", "")
+            if not secrets.compare_digest(fournie, cle):      # le flux n'est lisible qu'avec la clé donnée au front connecté
+                self.send_error(403)
+                return
             if chemin == "/snapshot.jpg":
                 with flux.cond:
                     jpeg = flux.jpeg
@@ -249,21 +261,22 @@ def demarrer_serveur_flux(flux):
                 self.send_error(404)
 
     # Sous Windows certains ports sont réservés (Hyper-V, WSL, Docker : WinError 10013) : on essaie les suivants.
-    for port in range(FLUX_PORT, FLUX_PORT + 20):
+    depart = port_depart or FLUX_PORT
+    for port in range(depart, depart + 20):
         try:
             serveur = ThreadingHTTPServer(("127.0.0.1", port), Handler)
             break
         except OSError:
             print(f"⚠️ Port {port} indisponible, essai du suivant…")
     else:
-        raise RuntimeError(f"aucun port libre entre {FLUX_PORT} et {FLUX_PORT + 19} (définir CAMERA_STREAM_PORT)")
+        raise RuntimeError(f"aucun port libre entre {depart} et {depart + 19}")
     serveur.daemon_threads = True
     threading.Thread(target=serveur.serve_forever, daemon=True).start()
-    print(f"🌐 Flux caméra : http://127.0.0.1:{port}/stream (local uniquement)")
+    print(f"🌐 Flux caméra : http://127.0.0.1:{port}/stream (local uniquement, protégé par clé)")
     return port
 
 
-def start_camera_auth():
+def start_camera_auth(camera_index=None):
     """Pilote la caméra (allumée seulement si présence ou ordre du front), identifie et publie sur MQTT."""
     model = load_orange_model()
     if model is None:
@@ -276,15 +289,22 @@ def start_camera_auth():
     embedder = ImageEmbedder(model=EMBEDDER)
 
     ctl, flux = Controle(), Flux()
+    # Si le poste (authentification) utilise la MÊME caméra, la porte la libère pendant une connexion au tableau de bord.
+    partage_camera = cameras.index("poste", defaut=camera_index, env="POSTE_CAMERA_INDEX") == camera_index
+    poste_fin = {"t": 0.0}
 
     def on_connect(client, userdata, flags, rc):
         client.subscribe(MQTT_TOPIC_CAPTEURS)
         client.subscribe(MQTT_TOPIC_CAMERA_CMD)
+        if partage_camera:
+            client.subscribe(MQTT_TOPIC_POSTE_CMD)
 
     def on_message(client, userdata, msg):
         try:
             data = json.loads(msg.payload.decode())
-            if msg.topic == MQTT_TOPIC_CAMERA_CMD:
+            if msg.topic == MQTT_TOPIC_POSTE_CMD:
+                poste_fin["t"] = time.time() + POSTE_BAIL_S if data.get("action") == "on" else 0.0
+            elif msg.topic == MQTT_TOPIC_CAMERA_CMD:
                 if data.get("action") in ("on", "auto"):
                     ctl.commande(data["action"], time.time())
                     print(f"🎛️  Commande caméra : {data['action']}")
@@ -302,7 +322,8 @@ def start_camera_auth():
     except Exception as e:
         print(f"❌ Broker MQTT injoignable ({e}) : ni présence ni commandes ne seront reçues.")
 
-    port_flux = demarrer_serveur_flux(flux)
+    cle_flux = secrets.token_urlsafe(16)    # tirée à chaque lancement, transmise uniquement via l'API authentifiée
+    port_flux = demarrer_serveur_flux(flux, cle_flux)
 
     partage = {"frame": None, "lock": threading.Lock()}
     arret = threading.Event()
@@ -320,7 +341,7 @@ def start_camera_auth():
             _, mode = ctl.etat(time.time())
             client.publish(MQTT_TOPIC_CAMERA_ETAT, json.dumps({
                 "actif": etat_cam["actif"], "mode": mode, "erreur": etat_cam["erreur"],
-                "flux": f"http://127.0.0.1:{port_flux}/stream"}))
+                "flux": f"http://127.0.0.1:{port_flux}/stream?k={cle_flux}"}))
             arret.wait(1.0)
 
     threading.Thread(target=publier_etat, daemon=True).start()
@@ -329,17 +350,24 @@ def start_camera_auth():
         while True:
             now = time.time()
             voulue, mode = ctl.etat(now)
+            occupee = partage_camera and now < poste_fin["t"]
+            if occupee:
+                voulue = False
+                if cap is None:
+                    etat_cam["erreur"] = "Caméra utilisée pour une connexion au tableau de bord"
+            elif etat_cam["erreur"] and etat_cam["erreur"].startswith("Caméra utilisée"):
+                etat_cam["erreur"] = None
 
             if voulue and cap is None:
-                cap = cv2.VideoCapture(CAMERA_INDEX)
-                if cap.isOpened():
+                cap = cameras.ouvrir_camera(camera_index)
+                if cap is not None:
                     etat_cam.update(actif=True, erreur=None)
                     print("🎥 Caméra allumée")
                 else:
-                    cap.release()
                     cap = None
-                    etat_cam.update(actif=False, erreur="Impossible d'ouvrir la webcam")
-                    print(f"❌ Impossible d'ouvrir la webcam (index {CAMERA_INDEX}, voir CAMERA_INDEX)")
+                    etat_cam.update(actif=False, erreur=f"Caméra de la porte {camera_index} introuvable ou déjà utilisée")
+                    print(f"❌ Caméra de la porte (index {camera_index}) introuvable ou déjà utilisée. "
+                          "Voir : python vision.py --choisir")
                     time.sleep(2)
             elif not voulue and cap is not None:
                 cap.release()
@@ -350,7 +378,7 @@ def start_camera_auth():
                     partage["frame"] = None
                 if AFFICHER_FENETRE:
                     cv2.destroyAllWindows()
-                print("⏸️  Caméra éteinte (plus de présence)")
+                print("⏸️  Caméra éteinte" + (" (libérée pour la connexion au tableau de bord)" if occupee else " (plus de présence)"))
 
             if cap is not None:
                 ret, frame = cap.read()
@@ -387,4 +415,11 @@ def start_camera_auth():
 
 
 if __name__ == "__main__":
-    start_camera_auth()
+    import argparse
+    ap = argparse.ArgumentParser(description="Caméra de la PORTE (boîtier) : reconnaissance et scénarios d'accès")
+    cameras.ajouter_options(ap)
+    options = ap.parse_args()
+    index_porte, fini = cameras.traiter_options(options, "porte", CAMERA_INDEX)
+    if not fini:
+        print(f"📷 Caméra de la porte : index {index_porte}")
+        start_camera_auth(index_porte)

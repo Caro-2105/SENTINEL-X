@@ -1,5 +1,10 @@
-from fastapi import FastAPI, HTTPException
+import os
+from typing import Optional
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Literal
 import paho.mqtt.client as mqtt
@@ -8,17 +13,38 @@ import threading
 import time
 from dataclasses import asdict
 import uvicorn
+import auth
 import db
 from scenarios import MoteurScenarios, Capteurs, Vision
 from analytics import AnalyticsAI
 
 app = FastAPI(title="SENTINEL-X API")
 
+# --- Authentification (visage puis mot de passe, voir auth.py) ---
+# L'étape 1 s'appuie sur la webcam du PC (vision_poste.py), pas sur la caméra du boîtier de la porte.
+# Pas de détecteur de présence ici : une photo présentée à la webcam peut valider l'étape 1, le mot de passe reste la barrière.
+authent = auth.Authentificateur()
+
+
+def utilisateur_courant(authorization: Optional[str] = Header(default=None)):
+    """Dépendance FastAPI : exige un jeton de session valide (en-tête `Authorization: Bearer <jeton>`)."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Authentification requise")
+    session = authent.verifier(authorization[7:].strip(), time.time())
+    if session is None:
+        raise HTTPException(status_code=401, detail="Session invalide ou expirée")
+    return session
+
+
+PROTEGE = [Depends(utilisateur_courant)]
+# Aperçu de la caméra sur la mire de connexion (comme un déverrouillage facial). AUTH_APERCU_LOGIN=0 pour le retirer.
+AUTH_APERCU_LOGIN = os.getenv("AUTH_APERCU_LOGIN", "1") != "0"
+
 # Autoriser les requêtes CORS pour le Dashboard (Front-end local)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -31,6 +57,10 @@ MQTT_TOPIC_VISION = "sentinel/vision"      # script caméra -> serveur (identit�
 MQTT_TOPIC_COMMANDES = "sentinel/commandes"  # serveur -> ESP8266 (buzzer, OLED)
 MQTT_TOPIC_CAMERA_ETAT = "sentinel/camera/state"  # vision.py -> serveur (caméra allumée ? mode ?)
 MQTT_TOPIC_CAMERA_CMD = "sentinel/camera/cmd"      # serveur -> vision.py (forcer / revenir en auto)
+# Webcam du PC (authentification du tableau de bord), gérée par vision_poste.py : canaux distincts de la caméra de la porte
+MQTT_TOPIC_POSTE_VISION = "sentinel/poste/vision"
+MQTT_TOPIC_POSTE_ETAT = "sentinel/poste/state"
+MQTT_TOPIC_POSTE_CMD = "sentinel/poste/cmd"
 HEARTBEAT_COMMANDE_S = 2.0                 # la commande est ré-émise même sans changement
 VISION_PERSIST_S = 10.0                    # une détection identique n'est consignée qu'une fois / 10 s
 
@@ -39,7 +69,7 @@ moteur = MoteurScenarios()
 analytique = AnalyticsAI()
 _lock = threading.Lock()
 mqtt_client = None
-etat = {"camera": None, "capteurs": None, "vision": None, "env": None, "decision": None,
+etat = {"poste": None, "camera": None, "capteurs": None, "vision": None, "env": None, "decision": None,
         "id_mesure": None, "id_detection": None, "commande": None, "commande_ts": 0.0}
 _membres_cache = {"data": {}, "ts": 0.0}
 _derniere_detection = {"label": None, "connu": None, "ts": 0.0}
@@ -56,11 +86,19 @@ def _num(x):
     return None if x is None else float(x)
 
 
+# Réaction (écran + buzzer + journal) aux alertes d'environnement ENV-01/02. DÉSACTIVÉE par défaut :
+# SENTINEL_ENV=1 pour la réactiver. L'analyse reste calculée et visible sur le tableau de bord.
+ENV_ACTIF = os.getenv("SENTINEL_ENV", "0") == "1"
+if not ENV_ACTIF:
+    print("ℹ️  Alertes d'environnement désactivées (scénarios d'accès seulement). SENTINEL_ENV=1 pour les réactiver.")
+
+
 def evaluer_et_agir():
     """Rejoue le moteur de scénarios, commande les actionneurs de l'ESP et journalise."""
     now = time.time()
     membres = _membres()
-    decision = moteur.evaluer(etat["capteurs"], etat["vision"], etat["env"], membres, now)
+    env = etat["env"] if ENV_ACTIF else None          # tests actuels : on ne réagit qu'aux scénarios d'ACCÈS
+    decision = moteur.evaluer(etat["capteurs"], etat["vision"], env, membres, now)
     etat["decision"] = decision
 
     # 1) Commande vers l'ESP8266 : sur changement, sinon en "heartbeat"
@@ -126,6 +164,34 @@ def traiter_vision(data):
         evaluer_et_agir()          # réaction immédiate : pas besoin d'attendre le prochain message capteurs
 
 
+def _commande_camera(action):
+    print(f"🎛️  Commande caméra envoyée : {action}" + ("" if mqtt_client is not None else " (MQTT non connecté !)"))
+    if mqtt_client is not None:
+        mqtt_client.publish(MQTT_TOPIC_CAMERA_CMD, json.dumps({"action": action}))
+
+
+def _commande_poste(action):
+    if mqtt_client is not None:
+        mqtt_client.publish(MQTT_TOPIC_POSTE_CMD, json.dumps({"action": action}))
+
+
+def traiter_poste_etat(data):
+    with _lock:
+        etat["poste"] = {**data, "recu_le": time.time()}
+
+
+def traiter_poste_vision(data):
+    """Identification faite par la webcam du PC : sert UNIQUEMENT à l'étape 1 de la connexion (pas aux scénarios d'accès)."""
+    label = data.get("label")
+    now = time.time()
+    confiance = float(data.get("confiance") or 0.0)
+    with _lock:
+        membres = _membres()
+        if authent.sur_vision(label, confiance, bool(data.get("connu")), int(data.get("visages", 0)), membres, now):
+            print(f"🔐 Étape 1 validée : visage de {label} reconnu ({confiance:.0%}) par la webcam du PC")
+            _commande_poste("off")
+
+
 def traiter_camera_etat(data):
     with _lock:
         etat["camera"] = {**data, "recu_le": time.time()}
@@ -136,14 +202,20 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe(MQTT_TOPIC)
     client.subscribe(MQTT_TOPIC_VISION)
     client.subscribe(MQTT_TOPIC_CAMERA_ETAT)
+    client.subscribe(MQTT_TOPIC_POSTE_VISION)
+    client.subscribe(MQTT_TOPIC_POSTE_ETAT)
 
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
-        if msg.topic != MQTT_TOPIC_CAMERA_ETAT:      # l'état caméra (1 msg/s) est trop bavard pour la console
+        if msg.topic not in (MQTT_TOPIC_CAMERA_ETAT, MQTT_TOPIC_POSTE_ETAT):   # états (1 msg/s) : trop bavards
             print(f"📥 [{msg.topic}] {data}")
         if msg.topic == MQTT_TOPIC_CAMERA_ETAT:
             traiter_camera_etat(data)
+        elif msg.topic == MQTT_TOPIC_POSTE_ETAT:
+            traiter_poste_etat(data)
+        elif msg.topic == MQTT_TOPIC_POSTE_VISION:
+            traiter_poste_vision(data)
         elif msg.topic == MQTT_TOPIC_VISION:
             traiter_vision(data)
         else:
@@ -175,11 +247,89 @@ def startup_event():
     mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
     mqtt_thread.start()
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def read_root():
-    return {"status": "SENTINEL-X Backend Operational"}
+    return RedirectResponse("/app/")          # le tableau de bord est servi par le backend : http://127.0.0.1:8000/
 
-@app.get("/api/data/history")
+
+# MODE DÉVELOPPEUR : SENTINEL_DEV=1 (ou « python lancer.py --dev ») permet d'entrer sans visage ni mot de passe,
+# uniquement depuis ce PC. À ne JAMAIS activer pour une démonstration ou une livraison.
+DEV_MODE = os.getenv("SENTINEL_DEV", "0") == "1"
+if DEV_MODE:
+    print("⚠️  MODE DÉVELOPPEUR : l'authentification peut être contournée (depuis ce PC seulement).")
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "SENTINEL-X Backend Operational", "dev": DEV_MODE}
+
+
+@app.post("/api/auth/dev")
+def auth_dev(request: Request):
+    """Session sans authentification : refusée (404) hors mode développeur ou hors de ce PC."""
+    hote = request.client.host if request.client else ""
+    if not DEV_MODE or hote not in ("127.0.0.1", "::1"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    jeton, nom = authent.session_dev(time.time())
+    print("⚠️  Connexion en mode développeur (sans authentification)")
+    return {"token": jeton, "utilisateur": nom}
+
+class DemandeConnexion(BaseModel):
+    login_id: str
+    mot_de_passe: str
+
+
+@app.post("/api/auth/face/start")
+def auth_face_start():
+    """Étape 1 : ouvre une connexion et allume la caméra pour la reconnaissance du visage."""
+    login_id = authent.demarrer(time.time())
+    _commande_poste("on")                 # webcam du PC (et non la caméra de la porte)
+    return {"login_id": login_id}
+
+
+@app.get("/api/auth/face/{login_id}")
+def auth_face_statut(login_id: str):
+    st = authent.statut(login_id, time.time())
+    cam = _poste_publique()
+    if st["etape"] == "visage":
+        # Diagnostic : on dit précisément ce qui manque plutôt qu'un vague "ça ne marche pas"
+        if not cam["en_ligne"]:
+            st["message"] = "Caméra du poste injoignable : lancer « python vision_poste.py »"
+        elif cam.get("erreur"):
+            st["message"] = f"{cam['erreur']}"
+        elif not cam["actif"]:
+            st["message"] = "Allumage de la caméra…"
+        elif AUTH_APERCU_LOGIN and cam.get("flux"):
+            st["apercu"] = cam["flux"]       # aperçu de son propre visage ; l'API n'écoute qu'en local par défaut
+    return st
+
+
+@app.post("/api/auth/login")
+def auth_login(d: DemandeConnexion):
+    """Étape 2 : mot de passe de l'utilisateur reconnu à l'étape 1."""
+    try:
+        jeton, nom = authent.connexion(d.login_id, d.mot_de_passe, db.get_mot_de_passe_hash, time.time())
+    except auth.AuthError as e:
+        print(f"🔐 Connexion refusée ({e.code}) : {e.message}")
+        headers = {"Retry-After": str(e.retry_after)} if e.retry_after else None
+        raise HTTPException(status_code=e.http, detail=e.detail(), headers=headers)
+    print(f"🔐 Connexion réussie : {nom}")
+    return {"token": jeton, "utilisateur": nom}
+
+
+@app.get("/api/auth/me")
+def auth_me(session: dict = Depends(utilisateur_courant)):
+    return {"utilisateur": session["nom"]}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(authorization: Optional[str] = Header(default=None)):
+    if authorization and authorization.lower().startswith("bearer "):
+        authent.deconnexion(authorization[7:].strip())
+    return {"deconnecte": True}
+
+
+@app.get("/api/data/history", dependencies=PROTEGE)
 def get_history(limit: int = 50):
     """Renvoie les données historiques pour le Dashboard"""
     data = db.get_latest_data(limit=limit)
@@ -196,20 +346,27 @@ def _camera_publique():
             "flux": cam.get("flux")}
 
 
+def _poste_publique():
+    p = etat["poste"]
+    if p is None or time.time() - p["recu_le"] > CAMERA_HORS_LIGNE_S:
+        return {"en_ligne": False, "actif": False, "erreur": None, "flux": None}
+    return {"en_ligne": True, "actif": bool(p.get("actif")), "erreur": p.get("erreur"), "flux": p.get("flux")}
+
+
 class CommandeCamera(BaseModel):
     action: Literal["on", "auto"]
 
 
-@app.post("/api/camera")
+@app.post("/api/camera", dependencies=PROTEGE)
 def commande_camera(cmd: CommandeCamera):
     """Bouton du front : `on` force la caméra allumée, `auto` la rend pilotée par le détecteur de présence."""
     if mqtt_client is None:
         raise HTTPException(status_code=503, detail="MQTT indisponible")
-    mqtt_client.publish(MQTT_TOPIC_CAMERA_CMD, json.dumps({"action": cmd.action}))
+    _commande_camera(cmd.action)
     return {"envoye": cmd.action}
 
 
-@app.get("/api/status")
+@app.get("/api/status", dependencies=PROTEGE)
 def get_status():
     """État en direct : capteurs, vision, analyse IA et commande envoyée à l'ESP (buzzer / OLED)."""
     # Sans verrou : le thread MQTT garde _lock pendant ses accès à la base, et le front ne doit pas attendre.
@@ -223,24 +380,32 @@ def get_status():
         "camera": _camera_publique(),
     }
 
-@app.get("/api/analytics")
+@app.get("/api/analytics", dependencies=PROTEGE)
 def get_analytics():
     """Analyse sur 5 min (moyennes par minute, variations %/min, seuils) pour température, humidité, gaz."""
     analytique.analyser()
     return analytique.dernier or {"niveau": 0, "metriques": {}}
 
-@app.get("/api/events")
+@app.get("/api/events", dependencies=PROTEGE)
 def get_events(limit: int = 50):
     """Journal des événements (accès autorisés, intrusions, alertes environnementales)."""
     return {"events": db.get_evenements(limit=limit)}
 
-@app.post("/api/events/{id_evenement}/ack")
+@app.post("/api/events/{id_evenement}/ack", dependencies=PROTEGE)
 def ack_event(id_evenement: int):
     """Acquittement d'un événement par le superviseur."""
     if not db.acquitter_evenement(id_evenement):
         raise HTTPException(status_code=404, detail="Événement introuvable")
     return {"acquitte": True}
 
+# Tableau de bord (frontend/) servi par le backend : une seule adresse, pas de fichier à ouvrir à la main.
+FRONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+if os.path.isdir(FRONT_DIR):
+    app.mount("/app", StaticFiles(directory=FRONT_DIR, html=True), name="front")
+
+
 if __name__ == "__main__":
     print("🚀 Démarrage du serveur API SENTINEL-X")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # 127.0.0.1 : l'API (caméra, capteurs) n'est pas exposée au réseau. API_HOST=0.0.0.0 pour l'ouvrir sciemment.
+    uvicorn.run("main:app", host=os.getenv("API_HOST", "127.0.0.1"), port=8000,
+                reload=os.getenv("API_RELOAD", "0") == "1")   # API_RELOAD=1 : rechargement automatique pour le développement
