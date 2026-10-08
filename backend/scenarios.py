@@ -66,10 +66,10 @@ ENV_TEXTES = {
     "gaz": "Fuite de gaz",
     "incendie": "Fumee / incendie",
     "surchauffe": "Surchauffe",
-    "humidite": "Humidite anormale",
+    "humidite": "Humidite anormal",
     "derive": "Derive suspecte",
 }
-ENV_TEXTE_DEFAUT = "Anomalie capteurs"
+ENV_TEXTE_DEFAUT = "Anomalie capteur"      # <= 16 caractères : l'écran LCD de l'ESP fait 16 colonnes
 
 # Priorité d'affichage OLED quand plusieurs scénarios sont actifs (le plus prioritaire d'abord)
 PRIORITE_ECRAN = ["ENV-02", "ACC-02", "ACC-05", "ACC-04", "ACC-06", "ENV-01", "ACC-01", "ACC-03", "IDLE"]

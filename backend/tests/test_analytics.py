@@ -33,7 +33,7 @@ class TestAnalytics(unittest.TestCase):
         self.assertEqual(r["niveau"], 0)
 
     def test_humidite_saut_10pct_critique(self):
-        r = analyser_serie(serie(hum=lambda m: 45.0 if m < 3 else 52.0))   # +15 % sur une minute
+        r = analyser_serie(serie(hum=lambda m: 45.0 if m < 4 else 52.0))   # +15 % sur une minute
         self.assertEqual(r["niveau"], 2)
         self.assertEqual(r["categorie"], "humidite")
 
@@ -58,13 +58,13 @@ class TestAnalytics(unittest.TestCase):
         vm = CONFIG["temperature"]["var_max"]
         r = analyser_serie(serie(temp=lambda m: 20.0 + 0.5 * vm * (m % 2)))        # oscille de la moitié du max : normal
         self.assertEqual(r["niveau"], 0)
-        r = analyser_serie(serie(temp=lambda m: 20.0 if m < 3 else 20.0 + 1.5 * vm))   # saut de 1,5 x le max sur une minute
+        r = analyser_serie(serie(temp=lambda m: 20.0 if m < 4 else 20.0 + 1.5 * vm))   # saut de 1,5 x le max sur une minute
         self.assertEqual(r["niveau"], 2)
         self.assertEqual(r["categorie"], "derive")
         self.assertIn("temperature", r["raison"])
 
     def test_gaz_variation_et_seuils_provisoires(self):
-        r = analyser_serie(serie(gaz=lambda m: 150.0 if m < 3 else 175.0))   # +16 %
+        r = analyser_serie(serie(gaz=lambda m: 150.0 if m < 4 else 175.0))   # +16 %
         self.assertEqual(r["niveau"], 2)
         self.assertEqual(r["categorie"], "gaz")
         self.assertEqual(analyser_serie(serie(gaz=lambda m: 650.0))["niveau"], 2)
@@ -183,17 +183,22 @@ class TestModeleVariations(unittest.TestCase):
         self.assertAlmostEqual(f["gaz_var_max"], 0.0, places=6)
 
     def test_le_modele_decide_des_variations(self):
-        r = analyser_serie(serie(), ModeleBidon(2))                 # série normale mais le modèle dit "critique"
+        r = analyser_serie(serie(hum=lambda m: 45.0 if m < 4 else 52.0), ModeleBidon(2))   # variation en cours + le modèle dit "critique"
         self.assertEqual(r["niveau"], 2)
         self.assertEqual(r["methode_variation"], "ia")
-        r = analyser_serie(serie(hum=lambda m: 45.0 if m < 3 else 52.0), ModeleBidon(0))
+        r = analyser_serie(serie(hum=lambda m: 45.0 if m < 4 else 52.0), ModeleBidon(0))
         self.assertEqual(r["niveau"], 0)                            # l'IA l'emporte sur la règle simple
+
+    def test_retour_a_la_normale_apres_un_pic(self):
+        pic = lambda m: 45.0 if m != 1 else 60.0                    # pic il y a 3 minutes, tout est rentré dans l'ordre
+        self.assertEqual(analyser_serie(serie(hum=pic))["niveau"], 0)                 # règle simple
+        self.assertEqual(analyser_serie(serie(hum=pic), ModeleBidon(2))["niveau"], 0)  # IA : plus de variation en cours
 
     def test_limites_absolues_restent_actives_avec_le_modele(self):
         self.assertEqual(analyser_serie(serie(temp=lambda m: CONFIG['temperature']['max'] + 5), ModeleBidon(0))["niveau"], 2)
 
     def test_modele_en_panne_retombe_sur_la_regle(self):
-        r = analyser_serie(serie(hum=lambda m: 45.0 if m < 3 else 52.0), ModeleCasse())
+        r = analyser_serie(serie(hum=lambda m: 45.0 if m < 4 else 52.0), ModeleCasse())
         self.assertEqual(r["methode_variation"], "regle")
         self.assertEqual(r["niveau"], 2)
 

@@ -4,8 +4,11 @@ Pont ESP -> SENTINEL-X.
 Le firmware du boîtier (version de l'équipe) fait tourner un MINI-BROKER MQTT sur l'ESP lui-même (uMQTTBroker).
 Il ne publie rien tout seul : il répond quand on l'interroge.
 
-    demande   esp/request/temp   ->  réponse  esp/response/temp   {"result":"23.5"}
-    demande   esp/request/dist   ->  réponse  esp/response/dist   {"result":"87"}
+    demande   esp/requetes/temp  ->  réponse  esp/response/temp   {"result":"23.5"}
+    demande   esp/requetes/dist  ->  réponse  esp/response/dist   {"result":"87"}   (idem hum, gaz)
+
+Dans l'autre sens, les ordres du back (écran + buzzer) sont traduits par ordres_esp.py en fonctions du firmware :
+esp/function/screen, esp/function/granted et esp/function/denied.
 
 Ce script interroge l'ESP toutes les PERIODE_S secondes et republie le résultat, au format attendu par le back,
 sur le broker Mosquitto local (topic `sentinel/sensors`) :
@@ -29,6 +32,8 @@ import time
 
 import paho.mqtt.client as mqtt
 
+from ordres_esp import OrdresEsp
+
 LOCAL_BROKER = os.getenv("MQTT_BROKER", "localhost")
 LOCAL_PORT = int(os.getenv("MQTT_PORT", "1883"))
 TOPIC_SORTIE = "sentinel/sensors"
@@ -36,7 +41,7 @@ PERIODE_S = float(os.getenv("ESP_PERIODE_S", "2"))
 SEUIL_PRESENCE_CM = float(os.getenv("ESP_SEUIL_PRESENCE_CM", "60"))
 MAINTIEN_PRESENCE_S = float(os.getenv("ESP_MAINTIEN_PRESENCE_S", "3"))   # évite les clignotements de présence
 TOPIC_COMMANDES = "sentinel/commandes"      # back -> pont : {"buzzer": 0|1|2, "ligne1": "...", "ligne2": "..."}
-TOPIC_ESP_ECRAN = "esp/cmd/ecran"           # pont -> ESP   : "buzzer|ligne1|ligne2" (voir iot/PATCH_ESP_ECRAN_BUZZER.md)
+TOPIC_REQUETES = os.getenv("ESP_TOPIC_REQUETES", "esp/requetes")   # ancien firmware : ESP_TOPIC_REQUETES=esp/request
 NOMS = {"temp": "température", "dist": "distance", "hum": "humidité", "gaz": "gaz"}
 VALEURS = {k: None for k in NOMS}
 VERROU = threading.Lock()
@@ -92,6 +97,57 @@ def chercher_esp():
         print("Aucun appareil MQTT trouvé : ESP éteint, hors du réseau, ou Wi-Fi qui isole les appareils.")
 
 
+def tester_esp(hote, port):
+    """Diagnostic : demande chaque capteur et affiche TOUT ce que l'ESP renvoie, quel que soit le topic."""
+    recus = []
+    c = mqtt.Client(client_id="sentinelx-test")
+
+    def on_connect(client, userdata, flags, rc):
+        print(f"connexion MQTT : {'OK' if rc == 0 else 'REFUSÉE (code %d)' % rc}")
+        client.subscribe("#")
+
+    def on_message(client, userdata, msg):
+        recus.append(msg.topic)
+        print(f"   ← reçu  {msg.topic}  {msg.payload.decode(errors='replace')}")
+
+    c.on_connect, c.on_message = on_connect, on_message
+    try:
+        c.connect(hote, port, 15)
+    except OSError as e:
+        raise SystemExit(f"Connexion impossible à {hote}:{port} : {e}")
+    c.loop_start()
+    time.sleep(1.5)
+    print("→ test écran : esp/function/screen  (regarde l'écran de l'ESP : « TEST PONT / OK » + un bip)")
+    c.publish("esp/function/screen", '{"str":"TEST PONT       OK"}')
+    time.sleep(3)
+    prefixes = [TOPIC_REQUETES] + [p for p in ("esp/requetes", "esp/request", "esp/requete") if p != TOPIC_REQUETES]
+    for prefixe in prefixes:
+        avant = len(recus)
+        print(f"→ demande {prefixe}/temp")
+        c.publish(f"{prefixe}/temp", "1")
+        t0 = time.time()
+        while time.time() - t0 < 4 and not any("/response/" in t or "/reponse" in t for t in recus[avant:]):
+            time.sleep(0.1)
+        if any("/response/" in t or "/reponse" in t for t in recus[avant:]):
+            print(f"   → le préfixe qui marche est « {prefixe} »")
+            for cle in ("dist", "hum", "gaz"):
+                print(f"→ demande {prefixe}/{cle}")
+                c.publish(f"{prefixe}/{cle}", "1")
+                time.sleep(3)
+            break
+        print("   (aucune réponse en 4 s)")
+    c.publish("esp/function/screen", '{"str":""}')
+    time.sleep(1)
+    c.loop_stop()
+    c.disconnect()
+    if not recus:
+        print("\nRien reçu : soit le firmware n'a pas reçu les demandes (mauvais topic ? regarde son moniteur série), "
+              "soit la carte capteurs ne répond pas à la commande série (TEMP, DIST, HUM, GAZ).")
+    else:
+        print("\nTopics vus : " + ", ".join(sorted(set(recus))))
+        print("Si les réponses arrivent sur un autre topic que esp/response/<capteur>, dis-le-moi.")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pont ESP -> SENTINEL-X")
     ap.add_argument("--esp", default=os.getenv("ESP_HOST"), help="adresse IP de l'ESP (affichée sur son écran)")
@@ -102,10 +158,15 @@ def main():
                     help="capteurs à interroger parmi temp,dist,hum,gaz (hum et gaz : seulement si le firmware les gère)")
     ap.add_argument("--seuil", type=float, default=SEUIL_PRESENCE_CM,
                     help="distance (cm) en dessous de laquelle quelqu'un est considéré présent (défaut %(default)g)")
+    ap.add_argument("--test", action="store_true", help="diagnostic : demande chaque capteur et affiche toutes les réponses")
     ap.add_argument("--chercher", action="store_true", help="cherche l'ESP sur le réseau (IP changée ?) puis quitte")
     args = ap.parse_args()
     if args.chercher:
         return chercher_esp()
+    if args.test:
+        if not args.esp:
+            raise SystemExit("Adresse de l'ESP manquante : python pont_esp.py --esp 10.235.154.64 --test")
+        return tester_esp(args.esp, args.port)
     actifs = [c.strip() for c in args.capteurs.split(",") if c.strip() in NOMS]
     if not actifs:
         raise SystemExit("--capteurs : valeurs possibles temp, dist, hum, gaz")
@@ -121,15 +182,21 @@ def main():
 
     def local_connecte(client, userdata, flags, rc):
         client.subscribe(TOPIC_COMMANDES)
+        print(f"[ESP] à l'écoute des ordres du back ({TOPIC_COMMANDES}) → ESP (esp/function/*)")
+
+    ordres = OrdresEsp()
 
     def local_message(client, userdata, msg):
-        """Ordre du back (écran + buzzer) -> ESP."""
+        """Ordre du back (écran + buzzer, renvoyé toutes les 2 s) -> fonctions du firmware de l'ESP."""
         try:
             c = json.loads(msg.payload.decode())
-            texte = "{}|{}|{}".format(int(c.get("buzzer", 0)), str(c.get("ligne1", ""))[:16], str(c.get("ligne2", ""))[:16])
+            envois = ordres.traiter(c.get("buzzer", 0), str(c.get("ligne1", "")), str(c.get("ligne2", "")), time.time())
         except (ValueError, TypeError, AttributeError):
             return
-        esp.publish(TOPIC_ESP_ECRAN, texte)
+        for topic, payload in envois:
+            info = esp.publish(topic, payload)
+            ok = esp.is_connected() and info.rc == 0
+            print(f"[ESP] ordre {'envoyé' if ok else 'NON ENVOYÉ (ESP non connecté)'} → {topic} {payload}")
 
     local.on_connect = local_connecte
     local.on_message = local_message
@@ -182,7 +249,7 @@ def main():
             averti = False
             for cle in actifs:
                 RECUS[cle].clear()
-                esp.publish(f"esp/request/{cle}", "1")
+                esp.publish(f"{TOPIC_REQUETES}/{cle}", "1")
                 bilan[cle][0] += 1
                 if RECUS[cle].wait(2.5):          # l'ESP attend jusqu'à 2 s la réponse de la carte capteurs
                     bilan[cle][1] += 1

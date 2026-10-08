@@ -86,11 +86,11 @@ def _num(x):
     return None if x is None else float(x)
 
 
-# Réaction (écran + buzzer + journal) aux alertes d'environnement ENV-01/02. DÉSACTIVÉE par défaut :
-# SENTINEL_ENV=1 pour la réactiver. L'analyse reste calculée et visible sur le tableau de bord.
-ENV_ACTIF = os.getenv("SENTINEL_ENV", "0") == "1"
+# Réaction (écran + buzzer + journal) aux alertes d'environnement ENV-01/02. ACTIVE par défaut ;
+# SENTINEL_ENV=0 (ou « python lancer.py --sans-env ») pour ne tester que les scénarios d'accès.
+ENV_ACTIF = os.getenv("SENTINEL_ENV", "1") != "0"
 if not ENV_ACTIF:
-    print("ℹ️  Alertes d'environnement désactivées (scénarios d'accès seulement). SENTINEL_ENV=1 pour les réactiver.")
+    print("ℹ️  Alertes d'environnement désactivées (scénarios d'accès seulement).")
 
 
 def evaluer_et_agir():

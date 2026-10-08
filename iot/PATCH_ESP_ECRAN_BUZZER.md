@@ -1,84 +1,32 @@
-# Patch firmware ESP : afficher les messages du back et faire sonner le buzzer
+# Dialogue back ↔ firmware ESP (version actuelle du firmware de l'équipe)
 
-Le firmware actuel (broker `uMQTTBroker` sur l'ESP) répond aux demandes `esp/request/*` mais n'affiche pas les
-messages du back (« Bienvenue Caroline », « INTRUSION »...) et ne fait pas sonner le buzzer.
-Le pont `backend/pont_esp.py` envoie désormais chaque ordre du back sur le topic **`esp/cmd/ecran`**, au format texte :
+Le firmware fait tourner un mini-broker MQTT (uMQTTBroker). Le pont `backend/pont_esp.py` s'y connecte en client.
 
-    buzzer|ligne1|ligne2          ex.   2|INTRUSION|Personne inconnue      (buzzer 0 = off, 1 = bips, 2 = alarme)
+## Lecture des capteurs (PC → ESP, puis réponse)
+| Demande (le contenu est ignoré) | Commande série envoyée à la carte capteurs | Réponse |
+|---|---|---|
+| `esp/requetes/temp` | `TEMP` | `esp/response/temp` → `{"result":"24.4"}` |
+| `esp/requetes/dist` | `DIST` | `esp/response/dist` |
+| `esp/requetes/hum`  | `HUM`  | `esp/response/hum` |
+| `esp/requetes/gaz`  | `GAZ`  | `esp/response/gaz` |
 
-Le back renvoie l'ordre à chaque changement et toutes les 2 secondes : l'ESP considère le message valide
-6 s après la dernière réception.
+Le nom après `esp/requetes/` est mis en majuscules et envoyé tel quel à la carte capteurs : un nom qu'elle ne
+connaît pas fait attendre 2 s (timeout) et bloque l'ESP.
 
-## 1. Variables et fonction (avant `class Broker`)
+## Écran et sons (PC → ESP) : `esp/function/*`
+| Topic | Contenu | Effet |
+|---|---|---|
+| `esp/function/screen` | `{"str":"<ligne 1 sur 16 car.><ligne 2>"}` (32 car. max, sans guillemet) | écran effacé puis écrit + bip court ; `{"str":""}` = écran vide, silencieux |
+| `esp/function/granted` | (vide) | mélodie « accès accordé » |
+| `esp/function/denied` | (vide) | mélodie « accès refusé » |
 
-```cpp
-static const char* TOPIC_ECRAN = "esp/cmd/ecran";
-static int alerteBuzzer = 0;
-static unsigned long messageJusqua = 0, dernierBip = 0;
+Le back pense en niveaux de buzzer 0 / 1 / 2 ; `backend/ordres_esp.py` les traduit : écran réécrit à chaque
+changement d'état seulement, « denied » répété tant qu'une alerte dure (toutes les 3 s en danger, 10 s en anomalie),
+« granted » à l'accès autorisé. Le firmware n'a pas d'alarme continue.
 
-static void recevoirEcran(const char* data, uint32_t length) {
-  char buf[64];
-  size_t n = length < sizeof(buf) - 1 ? length : sizeof(buf) - 1;
-  memcpy(buf, data, n); buf[n] = '\0';
-  char* p1 = strchr(buf, '|');  if (!p1) return;  *p1 = '\0';
-  char* p2 = strchr(p1 + 1, '|'); if (!p2) return; *p2 = '\0';
-  alerteBuzzer = atoi(buf);
-  char l[17];
-  snprintf(l, sizeof(l), "%-16.16s", p1 + 1); lcd.setCursor(0, 0); lcd.print(l);
-  snprintf(l, sizeof(l), "%-16.16s", p2 + 1); lcd.setCursor(0, 1); lcd.print(l);
-  messageJusqua = millis() + 6000;
-}
-```
+## Présence
+Le firmware publie lui-même `esp/presence` (`{"result":"<cm>"}`) quand la distance passe sous 50 cm. Le pont n'en a pas
+besoin : il interroge `dist` et applique son propre seuil (`--esp-seuil`, 60 cm par défaut).
 
-## 2. `updateLCD` : ne pas écraser le message
-
-Ajouter en première ligne de `updateLCD(...)` :
-
-```cpp
-  if (millis() < messageJusqua) return;   // un message du back est affiché
-```
-
-## 3. `Broker::onData` : traiter le nouveau topic (au début de la fonction)
-
-```cpp
-  if (topic == TOPIC_ECRAN) { recevoirEcran(data, length); return; }
-```
-
-## 4. `initMQTT` : s'abonner (dans la fonction, après la boucle)
-
-```cpp
-  mqtt.subscribe(TOPIC_ECRAN);
-```
-
-## 5. `loop()` : buzzer
-
-```cpp
-void loop() {
-  unsigned long now = millis();
-  if (now >= messageJusqua) alerteBuzzer = 0;          // plus d'ordre récent : silence
-  if (alerteBuzzer == 1 && now - dernierBip > 1000) { tone(Config::SPEAKER_PIN, 1000, 100); dernierBip = now; }
-  if (alerteBuzzer == 2 && now - dernierBip > 300)  { tone(Config::SPEAKER_PIN, 2000, 200); dernierBip = now; }
-}
-```
-
----
-
-# Ajouter l'humidité et le gaz aux réponses de l'ESP
-
-Dans le firmware actuel, la table `mqttRoutes` ne contient que `hello`, `DIST` et `TEMP` : l'ESP ne sait donc pas
-répondre pour l'humidité et le gaz, même si la carte capteurs les mesure. Ajouter deux lignes :
-
-```cpp
-static const MqttRoute mqttRoutes[] = {
-  {"esp/request/hello", "hello", "esp/response/hello"},
-  {"esp/request/dist",  "DIST",  "esp/response/dist"},
-  {"esp/request/temp",  "TEMP",  "esp/response/temp"},
-  {"esp/request/hum",   "HUM",   "esp/response/hum"},     // humidité (%)
-  {"esp/request/gaz",   "GAZ",   "esp/response/gaz"}      // gaz, valeur brute (MQ-2)
-};
-```
-
-Il faut aussi que la **carte capteurs** (celle qui répond sur le port série) comprenne les commandes `HUM` et `GAZ`
-et réponde par un nombre sur une ligne, comme elle le fait déjà pour `TEMP` et `DIST`. Côté PC :
-
-    python lancer.py --esp 10.235.154.64 --esp-capteurs temp,dist,hum,gaz
+## Ancien firmware (topics `esp/request/*`, pas d'écran)
+`ESP_TOPIC_REQUETES=esp/request` rétablit les anciens topics de lecture.

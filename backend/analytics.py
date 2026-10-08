@@ -51,6 +51,10 @@ PENTE_GAZ_ANOMALIE = 40.0      # unités/min
 PENTE_TEMP_ANOMALIE = 1.5      # °C/min
 PENTE_GAZ_CORREL = 15.0        # exemple du sujet : hausse lente de température + micro-déviation du gaz
 PENTE_TEMP_CORREL = 0.5
+# Retour à la normale rapide : seule la variation de la DERNIÈRE minute (par rapport à la précédente) déclenche l'alerte
+# de variation. Sans cela, un pic restait « critique » jusqu'à ce qu'il sorte de la fenêtre de 5 minutes.
+VARIATIONS_RECENTES = 1
+SEUIL_IA_VARIATION_PCT = 5.0   # l'IA n'est écoutée que si une mesure a varié d'au moins 5 % sur la dernière minute
 Z_FORT = 6.0                   # significativité d'une tendance "quasi certaine"
 Z_FAIBLE = 4.0
 
@@ -140,7 +144,7 @@ def _analyser_metrique(nom: str, lignes: List[dict], regle_variation: bool = Tru
                 continue
             delta = delta / abs(moyennes[ancien]) * 100.0
         res.variations.append(round(delta, 2))
-        if regle_variation and cfg["var_max"] is not None and abs(delta) > cfg["var_max"]:
+        if regle_variation and cfg["var_max"] is not None and abs(delta) > cfg["var_max"] and recent < VARIATIONS_RECENTES:
             res.niveau = 2
             quand = f" (il y a {recent} min)" if recent else ""
             res.raisons.append(f"{nom} {delta:+.1f}{res.unite_variation}/min > {cfg['var_max']:g}{res.unite_variation}{quand}")
@@ -295,6 +299,8 @@ def analyser_serie(lignes: List[dict], modele=None) -> dict:
             niveau_ia = predire_niveau(modele, feats)
         except Exception as e:
             log.error("Modèle des variations en échec (%s) -> règle simple.", e)
+    if niveau_ia and max(abs(feats[f"{n}_var_derniere"]) for n in METRIQUES) < SEUIL_IA_VARIATION_PCT:
+        niveau_ia = 0                   # plus aucune variation en cours : l'incident est terminé
     par_metrique = {n: _analyser_metrique(n, lignes, regle_variation=niveau_ia is None) for n in METRIQUES}
 
     if niveau_ia:                       # l'IA ne dit pas QUELLE mesure : on désigne celle qui varie le plus
