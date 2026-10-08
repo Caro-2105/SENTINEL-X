@@ -68,6 +68,23 @@ def verifier_force(mdp):
     return None
 
 
+LABEL_MAX = 40
+
+
+def verifier_label(label):
+    """Message d'erreur si l'identifiant de compte est invalide, sinon None.
+    Doit être identique au nom de la classe du modèle de reconnaissance pour que le visage soit reconnu."""
+    if not isinstance(label, str) or not label.strip():
+        return "identifiant vide"
+    if label != label.strip() or len(label) > LABEL_MAX:
+        return f"{LABEL_MAX} caractères maximum, sans espace au début ni à la fin"
+    if not all(c.isalnum() or c in " -_'" for c in label):
+        return "lettres, chiffres, espace, tiret, tiret bas ou apostrophe uniquement"
+    if label.lower() == "dev":
+        return "« dev » est réservé au mode développeur"
+    return None
+
+
 _FAUX_HASH = hash_password("mot-de-passe-factice")   # même temps de calcul quand l'utilisateur n'a pas de mot de passe
 
 

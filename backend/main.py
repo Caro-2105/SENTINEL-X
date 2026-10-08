@@ -37,6 +37,26 @@ def utilisateur_courant(authorization: Optional[str] = Header(default=None)):
 
 
 PROTEGE = [Depends(utilisateur_courant)]
+
+
+def _est_admin(session):
+    """Administrateur = compte marqué admin, ou session développeur.
+    Amorçage : tant qu'aucun administrateur n'existe, toute session authentifiée peut en créer un."""
+    if session["utilisateur"] == "dev":
+        return True
+    n = db.nb_admins_actifs()
+    if n is None:
+        raise HTTPException(status_code=503, detail="Base de données indisponible")
+    return n == 0 or db.est_admin(session["utilisateur"])
+
+
+def admin_requis(session: dict = Depends(utilisateur_courant)):
+    if not _est_admin(session):
+        raise HTTPException(status_code=403, detail="Réservé aux administrateurs")
+    return session
+
+
+ADMIN = [Depends(admin_requis)]
 # Aperçu de la caméra sur la mire de connexion (comme un déverrouillage facial). AUTH_APERCU_LOGIN=0 pour le retirer.
 AUTH_APERCU_LOGIN = os.getenv("AUTH_APERCU_LOGIN", "1") != "0"
 
@@ -319,7 +339,11 @@ def auth_login(d: DemandeConnexion):
 
 @app.get("/api/auth/me")
 def auth_me(session: dict = Depends(utilisateur_courant)):
-    return {"utilisateur": session["nom"]}
+    try:
+        admin = _est_admin(session)
+    except HTTPException:
+        admin = False
+    return {"utilisateur": session["nom"], "admin": admin}
 
 
 @app.post("/api/auth/logout")
@@ -327,6 +351,75 @@ def auth_logout(authorization: Optional[str] = Header(default=None)):
     if authorization and authorization.lower().startswith("bearer "):
         authent.deconnexion(authorization[7:].strip())
     return {"deconnecte": True}
+
+
+# --- Administration des comptes (onglet « Administration » du front) ---
+class NouveauCompte(BaseModel):
+    label: str
+    nom_affiche: Optional[str] = None
+    mot_de_passe: str
+    admin: bool = False
+
+
+class ModifCompte(BaseModel):
+    actif: Optional[bool] = None
+    admin: Optional[bool] = None
+    mot_de_passe: Optional[str] = None
+    nom_affiche: Optional[str] = None
+
+
+@app.get("/api/admin/membres")
+def admin_liste(session: dict = Depends(admin_requis)):
+    membres = db.list_membres_admin()
+    if membres is None:
+        raise HTTPException(status_code=503, detail="Base de données indisponible")
+    return {"membres": membres, "moi": session["utilisateur"],
+            "amorcage": not any(m["admin"] and m["actif"] for m in membres)}
+
+
+@app.post("/api/admin/membres", status_code=201)
+def admin_creer(d: NouveauCompte, session: dict = Depends(admin_requis)):
+    label = d.label.strip()
+    probleme = auth.verifier_label(label) or auth.verifier_force(d.mot_de_passe)
+    if probleme:
+        raise HTTPException(status_code=422, detail=f"Refusé : {probleme}.")
+    nom = (d.nom_affiche or "").strip() or label
+    cree = db.creer_membre(label, nom, auth.hash_password(d.mot_de_passe), d.admin)
+    if cree is None:
+        raise HTTPException(status_code=503, detail="Base de données indisponible")
+    if not cree:
+        raise HTTPException(status_code=409, detail=f"Le compte « {label} » existe déjà.")
+    _membres(force=True)
+    print(f"👤 Compte créé par {session['nom']} : {label}{' (admin)' if d.admin else ''}")
+    return {"cree": label}
+
+
+@app.patch("/api/admin/membres/{label}")
+def admin_modifier(label: str, d: ModifCompte, session: dict = Depends(admin_requis)):
+    cible = db.get_membre_admin(label)
+    if cible is None:
+        raise HTTPException(status_code=404, detail="Compte introuvable")
+    hachage = None
+    if d.mot_de_passe is not None:
+        probleme = auth.verifier_force(d.mot_de_passe)
+        if probleme:
+            raise HTTPException(status_code=422, detail=f"Refusé : {probleme}.")
+        hachage = auth.hash_password(d.mot_de_passe)
+    perd_admin = (d.actif is False and cible["admin"]) or (d.admin is False and cible["admin"])
+    if perd_admin and cible["actif"]:
+        if label == session["utilisateur"]:
+            raise HTTPException(status_code=400, detail="Vous ne pouvez pas retirer vos propres droits ni désactiver votre compte.")
+        if (db.nb_admins_actifs() or 0) <= 1:
+            raise HTTPException(status_code=400, detail="Il doit rester au moins un administrateur actif.")
+    ok = db.maj_membre(label, actif=d.actif, admin=d.admin, mot_de_passe_hash=hachage,
+                       nom_affiche=(d.nom_affiche or "").strip()[:40] or None)
+    if ok is None:
+        raise HTTPException(status_code=503, detail="Base de données indisponible")
+    if not ok:
+        raise HTTPException(status_code=422, detail="Aucune modification.")
+    _membres(force=True)
+    print(f"👤 Compte modifié par {session['nom']} : {label}")
+    return {"modifie": label}
 
 
 @app.get("/api/data/history", dependencies=PROTEGE)

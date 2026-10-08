@@ -120,6 +120,8 @@ def init_db():
     ''')
     # Authentification du tableau de bord : hachage scrypt du mot de passe (jamais en clair)
     cur.execute("ALTER TABLE membre ADD COLUMN IF NOT EXISTS mot_de_passe_hash TEXT")
+    # Rôle administrateur (interface « Administration » du front : création et gestion des comptes)
+    cur.execute("ALTER TABLE membre ADD COLUMN IF NOT EXISTS admin BOOLEAN NOT NULL DEFAULT FALSE")
     cur.execute('''
         CREATE TABLE IF NOT EXISTS scenario (
             code_scenario VARCHAR(10) PRIMARY KEY,
@@ -373,3 +375,91 @@ def list_membres_auth():
     cur.close()
     conn.close()
     return rows
+
+
+# ----------------------------------------------------------------------------------
+# Administration des comptes (interface « Administration » du tableau de bord)
+# ----------------------------------------------------------------------------------
+def list_membres_admin():
+    """Tous les comptes : [{label, nom, actif, admin, a_mot_de_passe, cree_le}]. None si la base est indisponible."""
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    cur = conn.cursor()
+    cur.execute("SELECT label_ia, nom_affiche, actif, admin, mot_de_passe_hash IS NOT NULL, cree_le "
+                "FROM membre ORDER BY label_ia")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return [{"label": r[0], "nom": r[1], "actif": r[2], "admin": r[3], "a_mot_de_passe": r[4],
+             "cree_le": r[5].strftime("%d/%m/%Y %H:%M") if r[5] else None} for r in rows]
+
+
+def get_membre_admin(label_ia):
+    """{label, actif, admin} ou None (compte inconnu ou base indisponible)."""
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    cur = conn.cursor()
+    cur.execute("SELECT label_ia, actif, admin FROM membre WHERE label_ia = %s", (label_ia,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return {"label": row[0], "actif": row[1], "admin": row[2]} if row else None
+
+
+def nb_admins_actifs():
+    """Nombre d'administrateurs actifs ; None si la base est indisponible."""
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM membre WHERE admin AND actif")
+    n = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return n
+
+
+def est_admin(label_ia):
+    m = get_membre_admin(label_ia)
+    return bool(m and m["admin"] and m["actif"])
+
+
+def creer_membre(label_ia, nom_affiche, hachage, admin=False):
+    """True = créé, False = ce compte existe déjà, None = base indisponible."""
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO membre (label_ia, nom_affiche, mot_de_passe_hash, admin) VALUES (%s, %s, %s, %s) "
+        "ON CONFLICT (label_ia) DO NOTHING",
+        (label_ia, (nom_affiche or label_ia)[:40], hachage, bool(admin)))
+    cree = cur.rowcount == 1
+    conn.commit()
+    cur.close()
+    conn.close()
+    return cree
+
+
+_CHAMPS_MEMBRE = {"actif": "actif", "admin": "admin", "mot_de_passe_hash": "mot_de_passe_hash",
+                  "nom_affiche": "nom_affiche"}
+
+
+def maj_membre(label_ia, **champs):
+    """Modifie actif / admin / mot_de_passe_hash / nom_affiche. True = modifié, False = inconnu, None = base HS."""
+    colonnes = [(_CHAMPS_MEMBRE[k], v) for k, v in champs.items() if k in _CHAMPS_MEMBRE and v is not None]
+    if not colonnes:
+        return False
+    conn = get_db_connection()
+    if conn is None:
+        return None
+    cur = conn.cursor()
+    sets = ", ".join(f"{c} = %s" for c, _ in colonnes)
+    cur.execute(f"UPDATE membre SET {sets} WHERE label_ia = %s", [v for _, v in colonnes] + [label_ia])
+    ok = cur.rowcount == 1
+    conn.commit()
+    cur.close()
+    conn.close()
+    return ok

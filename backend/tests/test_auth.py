@@ -240,5 +240,15 @@ class TestUneSeuleIdentification(unittest.TestCase):
             self.assertFalse(self.a.sur_vision(*args, MEMBRES, 1001.0), args)
 
 
+class TestLabel(unittest.TestCase):
+    def test_valides(self):
+        for l in ("Caroline", "Jean-Pierre", "Marie Curie", "O'Neil", "membre_2"):
+            self.assertIsNone(auth.verifier_label(l), l)
+
+    def test_invalides(self):
+        for l in ("", "   ", " Caroline", "Caroline ", "a" * 41, "x;DROP", "<b>", "dev", "DEV", None):
+            self.assertIsNotNone(auth.verifier_label(l), l)
+
+
 if __name__ == "__main__":
     unittest.main()

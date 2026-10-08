@@ -15,6 +15,7 @@ function showTab(nom) {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-' + nom));
     try { history.replaceState(null, '', '#' + nom); } catch (e) { /* ouvert en file:// */ }
     if (nom === 'capteurs') { envChart.resize(); gasChart.resize(); }
+    if (nom === 'admin') chargerComptes();
 }
 
 // ---------------------------------------------------------------- Courbes
@@ -407,6 +408,112 @@ async function envoyerMotDePasse(ev) {
     }
 }
 
+// ---------------------------------------------------------------- Administration (comptes)
+let moiLabel = null;
+
+function msgAdmin(texte, ok = false) {
+    const el = $('adm-msg');
+    el.textContent = texte;
+    el.className = 'adm-msg ' + (ok ? 'ok' : 'err');
+}
+
+async function erreurApi(r) {
+    try {
+        const d = (await r.json()).detail;
+        return typeof d === 'string' ? d : (Array.isArray(d) ? 'Données invalides.' : (d && d.message) || 'Erreur.');
+    } catch (e) { return 'Erreur ' + r.status; }
+}
+
+async function majAdmin(nom) {
+    let admin = false;
+    try {
+        const r = await api('/api/auth/me');
+        if (r.ok) admin = !!(await r.json()).admin;
+    } catch (e) { /* ignoré */ }
+    $('nav-admin').hidden = !admin;
+    if (!admin && $('tab-admin').classList.contains('active')) showTab('capteurs');
+    if (admin) chargerComptes();
+}
+
+async function chargerComptes() {
+    try {
+        const r = await api('/api/admin/membres');
+        if (!r.ok) return;
+        const d = await r.json();
+        moiLabel = d.moi;
+        $('adm-amorcage').hidden = !d.amorcage;
+        const corps = $('adm-body');
+        corps.replaceChildren();
+        for (const m of d.membres) {
+            const tr = document.createElement('tr');
+            tr.className = 'adm-row';
+            const c1 = document.createElement('td');
+            c1.textContent = m.nom === m.label ? m.label : `${m.nom} (${m.label})`;
+            const c2 = document.createElement('td');
+            const b = document.createElement('span');
+            b.className = 'badge ' + (m.actif ? (m.a_mot_de_passe ? 'ok' : 'warn') : 'off');
+            b.textContent = !m.actif ? 'Désactivé' : (m.a_mot_de_passe ? 'Actif' : 'Sans mot de passe');
+            c2.appendChild(b);
+            const c3 = document.createElement('td');
+            c3.textContent = m.admin ? 'Admin' : 'Membre';
+            const c4 = document.createElement('td');
+            const bouton = (txt, fn) => {
+                const x = document.createElement('button');
+                x.className = 'mini'; x.type = 'button'; x.textContent = txt; x.onclick = fn;
+                c4.appendChild(x); return x;
+            };
+            const soi = m.label === moiLabel;
+            bouton(m.actif ? 'Désactiver' : 'Activer', () => modifierCompte(m.label, { actif: !m.actif })).disabled = soi && m.actif;
+            bouton(m.admin ? 'Retirer admin' : 'Rendre admin', () => modifierCompte(m.label, { admin: !m.admin })).disabled = soi && m.admin;
+            bouton('Mot de passe', () => saisirMdp(tr, c4, m.label));
+            tr.append(c1, c2, c3, c4);
+            corps.appendChild(tr);
+        }
+    } catch (e) { /* le prochain affichage de l'onglet réessaiera */ }
+}
+
+function saisirMdp(tr, cellule, label) {
+    cellule.replaceChildren();
+    const champ = document.createElement('input');
+    champ.type = 'password'; champ.placeholder = 'Nouveau mot de passe'; champ.maxLength = 256;
+    champ.autocomplete = 'new-password';
+    const ok = document.createElement('button');
+    ok.className = 'mini'; ok.type = 'button'; ok.textContent = 'OK'; ok.style.marginTop = '4px';
+    const annuler = document.createElement('button');
+    annuler.className = 'mini'; annuler.type = 'button'; annuler.textContent = 'Annuler';
+    ok.onclick = () => modifierCompte(label, { mot_de_passe: champ.value }, 'Mot de passe de ' + label + ' modifié.');
+    annuler.onclick = chargerComptes;
+    cellule.append(champ, ok, annuler);
+    champ.focus();
+}
+
+async function modifierCompte(label, corps, succes) {
+    try {
+        const r = await api('/api/admin/membres/' + encodeURIComponent(label), {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps) });
+        if (r.ok) msgAdmin(succes || 'Compte ' + label + ' mis à jour.', true);
+        else msgAdmin(await erreurApi(r));
+    } catch (e) { msgAdmin('Serveur injoignable.'); }
+    majAdmin();
+}
+
+async function creerCompte(ev) {
+    ev.preventDefault();
+    $('adm-ok').disabled = true;
+    try {
+        const r = await api('/api/admin/membres', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label: $('adm-label').value, nom_affiche: $('adm-nom').value || null,
+                                   mot_de_passe: $('adm-mdp').value, admin: $('adm-admin').checked }) });
+        if (r.ok) {
+            msgAdmin('Compte « ' + $('adm-label').value.trim() + ' » créé.', true);
+            $('adm-form').reset();
+            majAdmin();
+        } else msgAdmin(await erreurApi(r));
+    } catch (e) { msgAdmin('Serveur injoignable.'); }
+    finally { $('adm-ok').disabled = false; }
+}
+
 function entrer(nom) {
     $('login').hidden = true;
     $('app').hidden = false;
@@ -414,6 +521,8 @@ function entrer(nom) {
     derniereSignature = null; derniereSigEvents = null;
     envChart.resize(); gasChart.resize();
     fetchStatus(); fetchHistorique(); fetchEvents();
+    msgAdmin('');
+    majAdmin(nom);
 }
 
 async function deconnecter(prevenirServeur = true) {
@@ -441,9 +550,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('cam-btn').onclick = envoyerCommandeCamera;
     $('logout-btn').onclick = () => deconnecter(true);
     $('login-form').onsubmit = envoyerMotDePasse;
+    $('adm-form').onsubmit = creerCompte;
     $('login-retry').onclick = demarrerLogin;
     const depart = location.hash.slice(1);
-    if (['capteurs', 'camera', 'evenements'].includes(depart)) showTab(depart);
+    if (['capteurs', 'camera', 'evenements'].includes(depart)) showTab(depart);   // « admin » : seulement après contrôle du rôle
 
     boucle(fetchStatus, 1000);
     boucle(fetchHistorique, 2000);

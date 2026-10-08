@@ -76,6 +76,16 @@
         table.events { width: 100%; border-collapse: collapse; font-size: .9rem; }
         table.events td, table.events th { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; }
         .ack-btn { background: var(--line); color: var(--txt); border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+        /* Administration */
+        .adm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+        .adm-form label { display: block; color: var(--mut); font-size: .85rem; margin-top: 10px; }
+        .adm-form input[type=text], .adm-form input[type=password], .adm-row input[type=password] { width: 100%; padding: 9px; margin-top: 4px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--txt); font-size: .95rem; }
+        .adm-form .chk { display: flex; gap: 8px; align-items: center; color: var(--txt); }
+        .adm-note { color: var(--mut); font-size: .8rem; margin: 6px 0 0; }
+        .adm-msg { min-height: 1.3em; margin: 10px 0 0; font-size: .9rem; }
+        .adm-msg.ok { color: #34d399; background: none; } .adm-msg.err { color: #fb7185; }
+        .adm-banner { background: #78350f; color: #fde68a; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: .9rem; }
+        table.events .mini { background: var(--line); color: var(--txt); border: 0; border-radius: 4px; padding: 3px 8px; cursor: pointer; margin-right: 4px; }
         .INFO { background: var(--ok); } .WARNING { background: var(--warn); } .CRITICAL { background: var(--bad); }
     </style>
 </head>
@@ -129,6 +139,7 @@
         <button data-tab="capteurs" class="active">Capteurs</button>
         <button data-tab="camera">Caméra porte</button>
         <button data-tab="evenements">Événements</button>
+        <button data-tab="admin" id="nav-admin" hidden>Administration</button>
     </nav>
 
     <!-- ===== Capteurs ===== -->
@@ -170,6 +181,40 @@
                 <thead><tr><th>Heure</th><th>Scénario</th><th>Détail</th><th></th></tr></thead>
                 <tbody id="events-body"></tbody>
             </table>
+        </div>
+    </section>
+
+    <!-- ===== Administration (comptes) ===== -->
+    <section id="tab-admin" class="tab">
+        <div id="adm-amorcage" class="adm-banner" hidden>Aucun administrateur n'existe encore : créez-en un (case « Administrateur »). Ensuite, seuls les administrateurs accéderont à cet onglet.</div>
+        <div class="adm-grid">
+            <div class="card">
+                <h2>Créer un compte</h2>
+                <form id="adm-form" class="adm-form" autocomplete="off">
+                    <label>Identifiant (= nom de la classe du modèle IA)
+                        <input id="adm-label" type="text" maxlength="40" list="adm-labels" required>
+                    </label>
+                    <datalist id="adm-labels"><option value="Caroline"><option value="Florent"><option value="Killian"></datalist>
+                    <label>Nom affiché (facultatif)
+                        <input id="adm-nom" type="text" maxlength="40">
+                    </label>
+                    <label>Mot de passe
+                        <input id="adm-mdp" type="password" maxlength="256" autocomplete="new-password" required>
+                    </label>
+                    <p class="adm-note">8 caractères minimum, avec majuscules, minuscules et au moins un chiffre.</p>
+                    <label class="chk"><input id="adm-admin" type="checkbox"> Administrateur</label>
+                    <p class="adm-note">La connexion par visage ne marche que si l'identifiant correspond à une personne connue du modèle de reconnaissance.</p>
+                    <button class="btn" type="submit" id="adm-ok" style="margin-top:12px">Créer le compte</button>
+                    <p id="adm-msg" class="adm-msg"></p>
+                </form>
+            </div>
+            <div class="card">
+                <h2>Comptes</h2>
+                <table class="events">
+                    <thead><tr><th>Compte</th><th>État</th><th>Rôle</th><th>Actions</th></tr></thead>
+                    <tbody id="adm-body"></tbody>
+                </table>
+            </div>
         </div>
     </section>
 </div>
