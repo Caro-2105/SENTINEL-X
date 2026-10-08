@@ -313,7 +313,7 @@ def start_camera_auth(camera_index=None):
         except Exception:
             pass
 
-    client = mqtt.Client("SentinelX-Vision")
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "SentinelX-Vision")
     client.on_connect = on_connect
     client.on_message = on_message
     try:

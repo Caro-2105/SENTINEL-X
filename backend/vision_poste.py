@@ -96,7 +96,7 @@ def main():
         elif action == "off":
             bail["fin"] = 0.0
 
-    client = mqtt.Client("SentinelX-Poste")
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "SentinelX-Poste")
     client.on_connect = on_connect
     client.on_message = on_message
     try:
