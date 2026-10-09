@@ -15,6 +15,7 @@ function showTab(nom) {
     document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-' + nom));
     try { history.replaceState(null, '', '#' + nom); } catch (e) { /* ouvert en file:// */ }
     if (nom === 'capteurs') { envChart.resize(); gasChart.resize(); }
+    if (nom === 'meteo') { meteoChart.resize(); fetchMeteo(); }
     if (nom === 'admin') chargerComptes();
 }
 
@@ -22,7 +23,7 @@ function showTab(nom) {
 Chart.defaults.color = '#94a3b8';
 Chart.defaults.borderColor = '#334155';
 
-let envChart, gasChart;
+let envChart, gasChart, meteoChart;
 let derniereSignature = null;
 let derniereSigEvents = null;
 
@@ -100,6 +101,24 @@ function initCharts() {
             { label: 'Niveau de gaz', borderColor: '#fbbf24', backgroundColor: 'rgba(251,191,36,0.1)', borderWidth: 2, fill: true, data: [] },
         ] },
         options: { ...COMMUN, scales: { x: X_AXIS, y: { type: 'linear' } } },
+    });
+}
+
+function initMeteoChart() {
+    meteoChart = new Chart($('meteoChart').getContext('2d'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+            { label: 'Probabilité IA (%)', borderColor: '#f87171', backgroundColor: 'rgba(248,113,113,0.15)', borderWidth: 2, fill: true, data: [], yAxisID: 'y', spanGaps: false },
+            { label: 'Rafales (km/h)', borderColor: '#38bdf8', borderWidth: 2, data: [], yAxisID: 'y1' },
+        ] },
+        options: { responsive: true, maintainAspectRatio: false, animation: false,
+            interaction: { mode: 'index', intersect: false },
+            elements: { line: { tension: 0.25 }, point: { radius: 0, hoverRadius: 4 } },
+            scales: {
+                x: { ticks: { maxTicksLimit: 10, maxRotation: 0 } },
+                y: { type: 'linear', position: 'left', min: 0, max: 100, title: { display: true, text: '%' } },
+                y1: { type: 'linear', position: 'right', min: 0, suggestedMax: 100, grid: { drawOnChartArea: false }, title: { display: true, text: 'km/h' } },
+            } },
     });
 }
 
@@ -408,6 +427,101 @@ async function envoyerMotDePasse(ev) {
     }
 }
 
+// ---------------------------------------------------------------- Prévisions météo
+let estAdmin = false;
+const NIVEAUX_METEO = [['Aucun danger', 'ok'], ['Vigilance', 'warn'], ['Danger', 'bad']];
+
+function msgMeteo(texte, ok = false) {
+    const el = $('met-msg');
+    el.textContent = texte;
+    el.className = 'adm-msg ' + (ok ? 'ok' : 'err');
+}
+
+async function fetchMeteo() {
+    if (!token) return;
+    try {
+        const r = await api('/api/meteo');
+        if (!r.ok) return;
+        afficherMeteo(await r.json());
+    } catch (e) { console.error('Erreur /api/meteo:', e); }
+}
+
+function afficherMeteo(m) {
+    $('met-form').hidden = !estAdmin;
+    if (m.lieu) $('met-lieu').textContent = m.lieu.nom + (m.lieu.pays ? ' (' + m.lieu.pays + ')' : '');
+    if (m.etat !== 'ok') {
+        const txt = { chargement: 'Chargement des prévisions…', desactive: 'Prévisions désactivées (--sans-meteo).' }[m.etat]
+            || ('Prévisions indisponibles : ' + (m.message || 'erreur'));
+        setBadge($('met-niveau'), m.etat === 'chargement' ? '…' : '—', 'off');
+        setBadge($('met-ia'), '—', 'off');
+        $('met-actuel').textContent = '—';
+        $('met-modele').textContent = txt;
+        $('met-dangers').replaceChildren();
+        return;
+    }
+    const [lib, cls] = NIVEAUX_METEO[m.niveau] || NIVEAUX_METEO[0];
+    setBadge($('met-niveau'), lib, cls);
+    const a = m.actuel;
+    $('met-actuel').textContent = `${a.temperature} °C · ${a.humidite} % · rafales ${a.rafales} km/h · ${a.pression} hPa`;
+
+    const ia = m.ia || {};
+    if (ia.etat === 'pret') {
+        setBadge($('met-ia'), `${Math.round(ia.proba_max * 100)} % max`, (NIVEAUX_METEO[ia.niveau] || NIVEAUX_METEO[0])[1]);
+        const auc = ia.auc === null || ia.auc === undefined ? 'n/a' : ia.auc.toFixed(2);
+        $('met-modele').textContent = `Modèle entraîné sur ${ia.exemples} heures d'historique (${ia.positifs} cas notables, `
+            + `${(ia.taux_base * 100).toFixed(1)} % des heures). Fiabilité sur données jamais vues (AUC) : ${auc}.` 
+            + (m.avertissement ? ' Dernière mise à jour impossible : ' + m.avertissement : '');
+    } else {
+        setBadge($('met-ia'), ia.etat === 'entrainement' ? 'Entraînement…' : 'Indisponible', 'off');
+        $('met-modele').textContent = ia.message || '';
+    }
+
+    const corps = $('met-dangers');
+    corps.replaceChildren();
+    if (!m.dangers.length) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 4; td.textContent = 'Aucun danger prévu par les seuils sur 72 h.';
+        tr.appendChild(td); corps.appendChild(tr);
+    }
+    for (const d of m.dangers) {
+        const tr = document.createElement('tr');
+        const cases = [d.libelle, null, new Date(d.quand).toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' }), `${d.valeur} ${d.unite}`];
+        for (const c of cases) {
+            const td = document.createElement('td');
+            if (c === null) {
+                const b = document.createElement('span');
+                b.className = 'badge ' + NIVEAUX_METEO[d.niveau][1];
+                b.textContent = NIVEAUX_METEO[d.niveau][0];
+                td.appendChild(b);
+            } else td.textContent = c;
+            tr.appendChild(td);
+        }
+        corps.appendChild(tr);
+    }
+
+    meteoChart.data.labels = m.serie.map(s => new Date(s.t).toLocaleString('fr-FR', { weekday: 'short', hour: '2-digit', minute: '2-digit' }));
+    meteoChart.data.datasets[0].data = m.serie.map(s => s.proba === null ? null : Math.round(s.proba * 100));
+    meteoChart.data.datasets[1].data = m.serie.map(s => s.rafales);
+    meteoChart.update('none');
+}
+
+async function changerLieu(ev) {
+    ev.preventDefault();
+    $('met-ok').disabled = true;
+    msgMeteo('Recherche du lieu…', true);
+    try {
+        const r = await api('/api/meteo/lieu', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                 body: JSON.stringify({ nom: $('met-nom').value }) });
+        if (r.ok) {
+            msgMeteo('Lieu appliqué : l\'IA va s\'entraîner sur son historique (1 à 2 minutes).', true);
+            $('met-nom').value = '';
+            fetchMeteo();
+        } else msgMeteo(await erreurApi(r));
+    } catch (e) { msgMeteo('Serveur injoignable.'); }
+    finally { $('met-ok').disabled = false; }
+}
+
 // ---------------------------------------------------------------- Administration (comptes)
 let moiLabel = null;
 
@@ -430,6 +544,8 @@ async function majAdmin(nom) {
         const r = await api('/api/auth/me');
         if (r.ok) admin = !!(await r.json()).admin;
     } catch (e) { /* ignoré */ }
+    estAdmin = admin;
+    $('met-form').hidden = !admin;
     $('nav-admin').hidden = !admin;
     if (!admin && $('tab-admin').classList.contains('active')) showTab('capteurs');
     if (admin) chargerComptes();
@@ -546,18 +662,21 @@ async function boucle(tache, periodeMs) {
 
 document.addEventListener('DOMContentLoaded', async () => {
     initCharts();
+    initMeteoChart();
     document.querySelectorAll('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
     $('cam-btn').onclick = envoyerCommandeCamera;
     $('logout-btn').onclick = () => deconnecter(true);
     $('login-form').onsubmit = envoyerMotDePasse;
     $('adm-form').onsubmit = creerCompte;
+    $('met-form').onsubmit = changerLieu;
     $('login-retry').onclick = demarrerLogin;
     const depart = location.hash.slice(1);
-    if (['capteurs', 'camera', 'evenements'].includes(depart)) showTab(depart);   // « admin » : seulement après contrôle du rôle
+    if (['capteurs', 'camera', 'evenements', 'meteo'].includes(depart)) showTab(depart);   // « admin » : seulement après contrôle du rôle
 
     boucle(fetchStatus, 1000);
     boucle(fetchHistorique, 2000);
     boucle(fetchEvents, 3000);
+    boucle(fetchMeteo, 60000);
 
     // Session déjà ouverte dans cet onglet ? (le serveur reste seul juge de sa validité)
     if (token) {

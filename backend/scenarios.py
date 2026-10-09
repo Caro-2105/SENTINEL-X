@@ -60,6 +60,11 @@ SCENARIOS: Dict[str, dict] = {
                    buzzer=1, ligne1="ATTENTION", ligne2="{env}"),
     "ENV-02": dict(categorie="ENVIRONNEMENT", libelle="Danger environnemental critique", severite="CRITICAL",
                    buzzer=2, ligne1="ALERTE DANGER", ligne2="{env}"),
+    # Prévisions météo (meteo_risque.py) : consignées dans le journal, jamais envoyées à l'ESP
+    "MET-01": dict(categorie="ENVIRONNEMENT", libelle="Vigilance météo : événement notable prévu", severite="WARNING",
+                   buzzer=0, ligne1="METEO", ligne2="Vigilance"),
+    "MET-02": dict(categorie="ENVIRONNEMENT", libelle="Danger météo : événement fort prévu", severite="CRITICAL",
+                   buzzer=0, ligne1="METEO", ligne2="Danger"),
 }
 
 ENV_TEXTES = {
@@ -68,6 +73,11 @@ ENV_TEXTES = {
     "surchauffe": "Surchauffe",
     "humidite": "Humidite anormal",
     "derive": "Derive suspecte",
+    "meteo_vent": "Vent violent",          # alertes météo (meteo_risque.py), même chemin que les capteurs
+    "meteo_pluie": "Fortes pluies",
+    "meteo_chaleur": "Forte chaleur",
+    "meteo_froid": "Grand froid",
+    "meteo_ia": "Risque meteo IA",
 }
 ENV_TEXTE_DEFAUT = "Anomalie capteur"      # <= 16 caractères : l'écran LCD de l'ESP fait 16 colonnes
 

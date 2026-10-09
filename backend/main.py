@@ -15,7 +15,8 @@ from dataclasses import asdict
 import uvicorn
 import auth
 import db
-from scenarios import MoteurScenarios, Capteurs, Vision
+import meteo_risque
+from scenarios import MoteurScenarios, Capteurs, Vision, EnvResult
 from analytics import AnalyticsAI
 
 app = FastAPI(title="SENTINEL-X API")
@@ -102,6 +103,46 @@ def _membres(force=False):
     return _membres_cache["data"]
 
 
+# --- Prévisions météo (IA prédictive, voir meteo_risque.py) : nécessite Internet, SENTINEL_METEO=0 pour l'éteindre ---
+METEO_ACTIF = os.getenv("SENTINEL_METEO", "1") != "0"
+meteo = meteo_risque.ServiceMeteo(os.path.join(os.path.dirname(os.path.abspath(__file__)), "meteo_cache"))
+_meteo_journal = {"niveau": 0, "lieu": None}
+_meteo_verrou = threading.Lock()
+
+
+def _journaliser_meteo(res):
+    """Consigne MET-01/02 dans le journal quand le niveau MONTE (pas à chaque rafraîchissement)."""
+    if not res or res.get("etat") != "ok":
+        return
+    niveau, lieu = res["niveau"], res["lieu"]["nom"]
+    with _meteo_verrou:
+        if lieu != _meteo_journal["lieu"]:
+            _meteo_journal.update(niveau=0, lieu=lieu)
+        monte = niveau > _meteo_journal["niveau"]
+        _meteo_journal["niveau"] = niveau
+    if not monte:
+        return
+    ia = res.get("ia") or {}
+    if res["dangers"]:
+        d = res["dangers"][0]
+        texte = f"{d['libelle']} - {lieu}"
+    else:
+        texte = f"Meteo IA {round(100 * ia.get('proba_max', 0))}% - {lieu}"
+    db.insert_evenement("MET-02" if niveau >= 2 else "MET-01", texte[:45], categorie_env="meteo",
+                        score_ia=ia.get("proba_max"), modele_ia="meteo-hgb" if ia.get("etat") == "pret" else None,
+                        instantane={"lieu": res["lieu"], "dangers": res["dangers"], "ia": ia})
+    print(f"🌦️  Événement météo niveau {niveau} : {texte}")
+
+
+def _boucle_meteo():
+    while True:
+        try:
+            _journaliser_meteo(meteo.rafraichir())
+        except Exception as e:
+            print(f"🌦️  Météo : {e}")
+        time.sleep(meteo_risque.DUREE_CACHE_S)
+
+
 def _num(x):
     return None if x is None else float(x)
 
@@ -118,6 +159,11 @@ def evaluer_et_agir():
     now = time.time()
     membres = _membres()
     env = etat["env"] if ENV_ACTIF else None          # tests actuels : on ne réagit qu'aux scénarios d'ACCÈS
+    if ENV_ACTIF and METEO_ACTIF:                      # danger météo proche => même alarme que les capteurs (écran + buzzer)
+        al = meteo.alarme()
+        if al and (env is None or env.niveau < al["niveau"]):
+            env = EnvResult(niveau=al["niveau"], score=al["score"], categorie=al["categorie"],
+                            raison=al["raison"], modele="meteo")
     decision = moteur.evaluer(etat["capteurs"], etat["vision"], env, membres, now)
     etat["decision"] = decision
 
@@ -266,6 +312,8 @@ def startup_event():
     # Lance MQTT en arrière-plan
     mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
     mqtt_thread.start()
+    if METEO_ACTIF:
+        threading.Thread(target=_boucle_meteo, daemon=True).start()
 
 @app.get("/", include_in_schema=False)
 def read_root():
@@ -420,6 +468,31 @@ def admin_modifier(label: str, d: ModifCompte, session: dict = Depends(admin_req
     _membres(force=True)
     print(f"👤 Compte modifié par {session['nom']} : {label}")
     return {"modifie": label}
+
+
+# --- Prévisions météo ---
+class LieuMeteo(BaseModel):
+    nom: str
+
+
+@app.get("/api/meteo", dependencies=PROTEGE)
+def get_meteo():
+    """Vigilance par seuils + probabilité IA d'événement notable, sur 72 h, pour le lieu choisi."""
+    if not METEO_ACTIF:
+        return {"etat": "desactive"}
+    res = meteo.donnees()
+    _journaliser_meteo(res)
+    return res
+
+
+@app.post("/api/meteo/lieu", dependencies=ADMIN)
+def set_lieu_meteo(d: LieuMeteo):
+    try:
+        lieu = meteo.changer_lieu(d.nom)
+    except meteo_risque.MeteoErreur as e:
+        injoignable = str(e).startswith("API météo")
+        raise HTTPException(status_code=502 if injoignable else 422, detail=str(e))
+    return {"lieu": lieu}
 
 
 @app.get("/api/data/history", dependencies=PROTEGE)

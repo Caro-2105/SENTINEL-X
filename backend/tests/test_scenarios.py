@@ -140,5 +140,16 @@ class TestCombinaison(unittest.TestCase):
         self.assertEqual((d.buzzer, d.ligne1, d.ligne2), (1, "ATTENTION", "Derive suspecte"))
 
 
+class TestAlarmeMeteo(unittest.TestCase):
+    def test_alerte_meteo_ecran_et_buzzer(self):
+        m = MoteurScenarios()
+        for cat, texte in (("meteo_vent", "Vent violent"), ("meteo_ia", "Risque meteo IA")):
+            d = m.evaluer(cap(100, presence=0), None, EnvResult(2, 1.0, cat, "x", "meteo"), MEMBRES, 100)
+            self.assertEqual((d.buzzer, d.ligne1, d.ligne2), (2, "ALERTE DANGER", texte))
+            self.assertLessEqual(len(d.ligne2), 16)
+        d = MoteurScenarios().evaluer(cap(100, presence=0), None, EnvResult(1, .5, "meteo_pluie", "x", "meteo"), MEMBRES, 100)
+        self.assertEqual((d.buzzer, d.ligne1, d.ligne2), (1, "ATTENTION", "Fortes pluies"))
+
+
 if __name__ == "__main__":
     unittest.main()

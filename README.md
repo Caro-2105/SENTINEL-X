@@ -1,29 +1,26 @@
 # SENTINEL-X
 
-Projet d'avant-poste industriel du futur développé dans le cadre du Workshop Bac+4.
+Prototype d'avant-poste industriel pour la société fictive AetherCorp, réalisé dans le cadre du Workshop Bac+4.
+Équipe : Caroline Delcour, Florent Germain, Killian Pinte et Quentin Bullert.
 
-## 🎯 Objectif
-Créer un prototype cyber-physique (Edge Node) autonome capable de détecter les menaces environnementales, d'intrusions physiques, et cyber-sécuritaires pour AetherCorp.
+## Principe
 
-## 🏗️ Architecture et Technologies
+Un boîtier installé à une porte (ESP8266, carte capteurs, écran LCD, haut-parleur, caméra USB) détecte l'arrivée d'une personne, l'identifie par reconnaissance faciale et l'autorise ou non à entrer. Les personnes à l'intérieur utilisent un PC serveur qui héberge le tableau de bord (mesures en direct, courbes, journal d'événements, prévisions). Le boîtier mesure aussi l'environnement (température, humidité, gaz) et déclenche écran et buzzer en cas d'anomalie.
 
-L'équipe s'est orientée vers un écosystème **Full Python** pour la partie serveur :
+## Architecture
 
-*   **IA & Data** : Modèles de Machine Learning générés via **Orange** et exportés au format `.pkl`.
-*   **Backend** : Serveur Python gérant la logique métier, l'ingestion MQTT et l'utilisation des modèles IA `.pkl`.
-*   **IoT & Edge** : ESP8266 (Firmware C/C++) avec capteurs de gaz (MQ-2), présence (PIR), température/humidité (DHT22), RFID (pour l'authentification locale), reconnaissance faciale et infrarouge (Cas "Terminator").
-*   **Infra & Cyber** : Docker-compose (Serveur MQTT Mosquitto), sécurité et chiffrement des flux.
+- **Boîtier (iot/)** : firmware C++ de l'ESP8266. Il embarque un mini-broker MQTT (port 1883), répond aux demandes de mesures, publie la présence et pilote l'écran et le haut-parleur.
+- **Pont ESP (backend/pont_esp.py)** : interroge l'ESP, reformate les mesures et les publie sur le broker Mosquitto du PC. Il relaie aussi les ordres d'écran et de buzzer du serveur vers l'ESP.
+- **Backend (backend/)** : API FastAPI, client MQTT, base PostgreSQL, moteur de scénarios, IA d'analyse des mesures, authentification, prévisions météo. Il sert aussi le tableau de bord.
+- **IA (ai/)** : modèles Orange (reconnaissance faciale, variations des mesures) et leurs scripts d'entraînement.
+- **Tableau de bord (frontend/)** : HTML et JavaScript (Chart.js), servi par le backend.
+- **Infrastructure (infra/)** : Docker Compose (Mosquitto et PostgreSQL).
 
-## 📂 Arborescence du Projet
+Arborescence : `iot/`, `ai/`, `backend/`, `frontend/`, `infra/`, `lancer.py` (lanceur unique) et `rapport_sentinel_x.md` (rapport de projet détaillé).
 
-*   `/iot` : Code source C++ pour le microcontrôleur ESP8266 et gestion des capteurs matériels.
-*   `/ai` : Stockage des modèles entraînés (ex: `modele_orange.pkl`) et scripts d'inférence Python (vision, analyse de séries temporelles / logs).
-*   `/backend` : Application Python (gestionnaire MQTT, appels à l'IA, logique d'alerte).
-*   `/infra` : Fichiers de configuration de l'infrastructure (ex: `docker-compose.yml`, configs Mosquitto).
+## Démarrage rapide
 
-## 🚀 Démarrage rapide (un seul terminal)
-
-Prérequis : **Python 3.10+** (testé en 3.14), **Docker Desktop lancé**, Internet (l'embedder Inception v3 d'Orange).
+Prérequis : Python 3.10 ou plus (testé en 3.14), Docker Desktop lancé, accès Internet (embedder Inception v3 d'Orange, prévisions météo).
 
 ```bash
 git clone https://github.com/Caro-2105/SENTINEL-X.git
@@ -32,58 +29,128 @@ python -m pip install -r backend/requirements.txt
 python lancer.py            # sous Windows : double-clic sur lancer.bat
 ```
 
-Au **premier lancement**, `lancer.py` vérifie les bibliothèques et les modèles, démarre Docker (base + broker),
-liste les caméras du PC pour que vous choisissiez celle de la **porte** (USB externe) et celle du **poste**
-(webcam intégrée), puis demande de **choisir votre prénom et un mot de passe** (8 caractères minimum).
-Il ouvre ensuite http://127.0.0.1:8000/ : visage, puis mot de passe, puis tableau de bord. `Ctrl+C` arrête tout.
+Au premier lancement, `lancer.py` vérifie les bibliothèques et les modèles, démarre Docker (base et broker), fait choisir la caméra de la porte (USB externe) et celle du poste (webcam intégrée), puis demande un prénom et un mot de passe (8 caractères minimum, avec majuscules, minuscules et un chiffre). Il ouvre ensuite http://127.0.0.1:8000/ : reconnaissance du visage, mot de passe, puis tableau de bord. `Ctrl+C` arrête l'ensemble.
+
+### Options du lanceur
 
 | Commande | Effet |
 |---|---|
-| `python lancer.py --simulateur` | joue un scénario sans capteurs ni caméra de porte (`--simulateur gaz`, `incendie`…) |
-| `python lancer.py --sans-porte` | pas de caméra du boîtier (tester seulement la connexion) |
-| `python lancer.py --reconfigurer` | re-choisir les caméras |
-| `python lancer.py --mot-de-passe` | changer son mot de passe |
-| `python lancer.py --verbeux` | afficher tous les logs techniques |
+| `--esp <IP>` | relaie les mesures de l'ESP (IP affichée sur son écran au démarrage) |
+| `--esp-capteurs temp,dist,hum,gaz` | capteurs à interroger (défaut : `temp,dist`) |
+| `--esp-seuil <cm>` | distance de détection de présence (défaut : 60) |
+| `--esp-fahrenheit` | température de l'ESP en °F, convertie en °C |
+| `--simulateur [scénario]` | joue un scénario sans matériel (`gaz`, `incendie`, etc.) |
+| `--sans-env` | pas d'écran ni de buzzer pour les alertes d'environnement (capteurs et météo) |
+| `--sans-meteo` | désactive les prévisions météo (aucun appel à Internet) |
+| `--sans-porte` | pas de caméra du boîtier |
+| `--sans-poste` | pas de caméra du poste |
+| `--dev` | mode développeur : bouton d'entrée sans visage ni mot de passe, depuis ce PC seulement |
+| `--reconfigurer` | choisir à nouveau les caméras |
+| `--mot-de-passe` | changer son mot de passe |
+| `--sans-docker`, `--sans-navigateur`, `--verbeux` | ne pas démarrer Docker, ne pas ouvrir le navigateur, afficher tous les logs |
 
-Dépannage : Docker non démarré (lancer Docker Desktop) ; mauvaise caméra (`--reconfigurer`, les numéros diffèrent d'un PC à l'autre) ;
-port 8000, 1883 ou 5433 déjà utilisé (fermer l'ancien processus) ; variables d'environnement PowerShell : `$env:NOM="valeur"` (pas `set`).
-Tests : `cd backend && python -m unittest discover -s tests -v`. Détail des stories et des topics : `backend/MQTT_SCHEMA.md`.
+Exemple avec le matériel : `python lancer.py --esp 10.235.154.64 --esp-capteurs temp,dist,hum,gaz`.
 
-### Brancher l'IA
-*   **Reconnaissance faciale** : `backend/vision.py` charge `ai/V2.pkcls` (réseau Orange, classes Caroline / Florent / Killian / Personne / Vide) et publie le résultat sur `sentinel/vision`. Lancer `python vision.py`. Prérequis : NumPy >= 2 (le modèle a été sauvegardé avec NumPy 2), Orange3 3.40, scikit-learn 1.5.2, Orange3-ImageAnalytics. L'embedder doit être celui du workflow d'entraînement (`FACE_EMBEDDER`, `inception-v3` par défaut) ; Inception v3 passe par le serveur d'embedding d'Orange et demande Internet.
-*   **IA analytique (variations sur 5 min)** : `backend/analytics.py` relit en base les 5 dernières minutes (température, humidité, gaz), calcule les moyennes par minute et fait juger les variations par un modèle Orange `ai/modele_variations.pkcls` (0 normal / 1 anomalie / 2 critique). Les limites min/max se règlent dans `CONFIG` (haut de `analytics.py`). Sans modèle : règle simple `var_max`. Il détecte aussi les dérives lentes (pente sur 60 s + significativité statistique), et garde des limites de sécurité absolues indépendantes de `CONFIG`. Résultat : `GET /api/analytics`. Entraînement : `cd ai; python generer_dataset_variations.py; python entrainer_variations.py` (ou sous Orange : File `dataset_variations.tab` → Random Forest → Test & Score → Save Model sous `modele_variations.pkcls`). Les données d'entraînement sont SIMULÉES : à remplacer par de vraies mesures étiquetées.
+Le mode `--dev` contourne l'authentification : ne jamais l'utiliser pour une démonstration ou une livraison.
 
-## Authentification du tableau de bord (visage puis mot de passe)
+### Dépannage
 
-Deux caméras, deux rôles (voir le « lore » : un boîtier à la porte, un PC à l'intérieur) :
+- Docker non démarré : lancer Docker Desktop.
+- Mauvaise caméra : `--reconfigurer` (les numéros diffèrent d'un PC à l'autre).
+- Port 8000, 1883 ou 5433 déjà utilisé : fermer l'ancien processus.
+- Variables d'environnement sous PowerShell : `$env:NOM="valeur"`.
+- Mosquitto : `infra/mosquitto/config/mosquitto.conf` doit contenir `listener 1883 0.0.0.0` (l'adresse 0.0.0.0, pas l'IP du PC).
 
-| | Boîtier à la porte | Poste (PC du tableau de bord) |
-|---|---|---|
-| Caméra | caméra USB externe du boîtier | provisoirement la même caméra (la webcam intégrée reconnaît mal : qualité différente de l'entraînement) |
-| Script | `python vision.py` | `python vision_poste.py` |
-| Allumée par | détecteur de présence (PIR) ou bouton du front | une connexion au tableau de bord |
-| Sert à | scénarios d'accès (LED verte, écran, alarme) | authentifier la personne devant le PC |
-| Canaux MQTT | `sentinel/vision`, `sentinel/camera/*` | `sentinel/poste/vision`, `sentinel/poste/*` |
+### Tests
 
-La page `frontend/index.html` s'ouvre sur une mire de connexion en deux étapes, **contrôlée par le backend** (toutes les routes `/api/*` sauf `/api/auth/*` exigent un jeton de session) :
-
-1. **Visage** : la webcam du PC s'allume (aperçu affiché) ; **une** identification d'un membre actif (un seul visage, confiance ≥ 85 %, réglable par `AUTH_CONFIANCE_MIN`) suffit. `AUTH_IDENTIFICATIONS=3` exige 3 identifications successives (plus strict).
-2. **Mot de passe** de la personne reconnue (haché en scrypt avec sel, 5 essais puis verrouillage 60 s, doublé à chaque récidive).
-
-Le jeton expire après 30 min d'inactivité (8 h maximum). Le flux de chaque caméra n'est lisible qu'avec une clé tirée au lancement du script ; l'aperçu de la mire de connexion peut être retiré avec `AUTH_APERCU_LOGIN=0`.
-
-Première utilisation (aucun mot de passe n'est dans le code) :
-
-```
+```bash
 cd backend
-python manage_users.py mdp Caroline     # idem Florent, Killian (nom = label du modèle Orange)
-python manage_users.py liste
-python main.py                          # écoute sur 127.0.0.1 ; API_HOST=0.0.0.0 pour l'ouvrir au réseau
-python vision.py --choisir              # (une fois par PC) montre chaque caméra : Entrée sur la caméra externe USB de la porte
-python vision_poste.py --choisir        # idem pour l'authentification (mémorisé dans backend/camera_config.json)
-python vision_poste.py                  # caméra du poste (authentification)
-python vision.py                        # caméra du boîtier (porte) : scénarios d'accès. Tant que le poste partage la même caméra, ne pas le lancer pendant une connexion
+python -m unittest discover -s tests -v
 ```
 
-Limites connues, à traiter avant la livraison : pas de détection de « vivant » sur la webcam du poste (une photo peut valider l'étape 1 : le mot de passe reste la vraie barrière), broker Mosquitto en accès anonyme (n'importe qui sur le réseau peut publier une fausse identité sur `sentinel/poste/vision`), pas de HTTPS entre le navigateur et l'API (acceptable en local), identifiants de la base encore dans `docker-compose.yml` et `db.py`.
-Tests : `python -m unittest discover -s tests -v`.
+## Boîtier ESP8266
+
+Firmware : `iot/sentinel_x_esp_broker.ino` (bibliothèques ESP8266WiFi, uMQTTBroker, LiquidCrystal).
+
+1. Renseigner `WIFI_SSID` et `WIFI_PASS` dans le fichier avant de flasher (ne pas versionner le mot de passe).
+2. Au démarrage, l'écran affiche l'adresse IP de l'ESP pendant quelques secondes : c'est la valeur à donner à `--esp`.
+3. Le PC et l'ESP doivent être sur le même réseau. L'IP peut changer à chaque connexion (DHCP) : une réservation d'adresse dans le routeur est recommandée.
+
+Les demandes du PC sont placées dans une file et traitées dans `loop()` : le callback réseau ne doit jamais attendre la carte capteurs.
+
+Protocole MQTT de l'ESP :
+
+| Sens | Topic | Contenu |
+|---|---|---|
+| PC vers ESP | `esp/requetes/<temp\|dist\|hum\|gaz>` | ignoré |
+| ESP vers PC | `esp/response/<capteur>` | `{"result":"<valeur>"}` |
+| PC vers ESP | `esp/function/screen` | `{"str":"<16 car.><16 car.>"}` (`{"str":""}` efface l'écran sans bip) |
+| PC vers ESP | `esp/function/granted`, `esp/function/denied` | mélodie accès autorisé ou refusé |
+| ESP vers PC | `esp/presence` | `{"result":"<cm>"}` quand la distance est inférieure à 50 cm |
+
+Diagnostic de la liaison : `python backend/pont_esp.py --esp <IP> --test` (affiche les messages reçus et envoie un texte de test à l'écran). `python backend/pont_esp.py --chercher` scanne le réseau pour retrouver l'ESP. Détails : `iot/PATCH_ESP_ECRAN_BUZZER.md`.
+
+L'écran fait 16 colonnes sur 2 lignes et n'affiche pas les accents : les textes sont convertis en ASCII et raccourcis.
+
+## Scénarios
+
+Le moteur de scénarios (`backend/scenarios.py`) combine présence, identité, mesures et analyses pour décider de l'écran et du buzzer. Chaque événement est consigné dans le journal du tableau de bord.
+
+- Accès : présence détectée, identification en cours, accès autorisé, visage inconnu (intrusion), présence sans visage exploitable, confiance insuffisante.
+- Environnement : anomalie (niveau 1, bip intermittent) ou danger critique (niveau 2, alarme continue) pour le gaz, la fumée, la température, l'humidité et les dérives.
+- Météo : voir plus bas.
+
+Il n'y a plus de capteur infrarouge ni de RFID : la règle anti-usurpation par chaleur (ACC-05) est inactive. Le catalogue complet et les seuils sont dans `rapport_sentinel_x.md` et `backend/MQTT_SCHEMA.md`.
+
+## Intelligence artificielle
+
+### Reconnaissance faciale
+
+`backend/vision.py` charge `ai/V2.pkcls` (réseau Orange, classes Caroline, Florent, Killian, Personne, Vide) et publie l'identité sur `sentinel/vision`. Prérequis : NumPy 2 ou plus, Orange3 3.40, scikit-learn, Orange3-ImageAnalytics. L'embedder doit être celui de l'entraînement (`FACE_EMBEDDER`, `inception-v3` par défaut) ; il passe par le serveur d'embedding d'Orange et demande Internet.
+
+### Analyse des variations des mesures
+
+`backend/analytics.py` relit les 5 dernières minutes en base (température, humidité, gaz), calcule les moyennes par minute et fait juger les variations par le modèle `ai/modele_variations.pkcls` (0 normal, 1 anomalie, 2 critique). Sans modèle, une règle simple sur `var_max` s'applique. Des limites de sécurité absolues restent actives dans tous les cas. Résultat : `GET /api/analytics`. Les limites se règlent dans `CONFIG` en haut du fichier.
+
+Entraînement : `cd ai; python generer_dataset_variations.py; python entrainer_variations.py`. Les données d'entraînement sont simulées : elles doivent être remplacées par de vraies mesures étiquetées.
+
+### Prévisions météo
+
+Onglet Prévisions du tableau de bord : risque météo sur 72 h pour un lieu au choix (Paris par défaut, modifiable par un administrateur).
+
+- Source : API Open-Meteo, gratuite et sans clé.
+- Vigilance : seuils sur les prévisions (rafales 60 et 90 km/h, pluie 20 et 40 mm en 6 h, chaleur 35 et 40 °C, froid -5 et -15 °C).
+- IA : au premier affichage d'un lieu, un modèle scikit-learn s'entraîne sur 4 ans d'historique (1 à 2 minutes) et estime la probabilité d'un événement notable dans les 24 h. Sa fiabilité (AUC sur données non vues) est affichée. Le modèle et le lieu sont mis en cache dans `backend/meteo_cache/` (non versionné).
+- Journal : un événement `MET-01` (vigilance) ou `MET-02` (danger) est ajouté quand le niveau monte.
+- Alarme : un danger prévu dans les 24 prochaines heures (`METEO_ALARME_H`) déclenche écran et buzzer comme une alerte de capteur. L'IA seule ne sonne qu'à partir de 60 % de probabilité.
+
+Outil pédagogique : ce n'est pas une alerte officielle.
+
+## Authentification et comptes
+
+Le tableau de bord exige une connexion en deux étapes, contrôlée par le backend (toutes les routes `/api/*` sauf `/api/auth/*` et `/api/health` demandent un jeton de session) :
+
+1. Visage : la webcam du PC s'allume ; une identification d'un membre actif, avec un seul visage et une confiance d'au moins 85 % (`AUTH_CONFIANCE_MIN`), suffit. `AUTH_IDENTIFICATIONS=3` en exige trois successives.
+2. Mot de passe de la personne reconnue : haché en scrypt avec sel, 5 essais puis verrouillage de 60 s, doublé à chaque récidive.
+
+Le jeton expire après 30 minutes d'inactivité (8 heures au maximum).
+
+Deux caméras sont utilisées : celle de la porte (`vision.py`, allumée par la présence détectée ou par le bouton du tableau de bord) et la webcam du poste (`vision_poste.py`, allumée seulement pendant une connexion). Leurs canaux MQTT sont distincts (`sentinel/vision` et `sentinel/poste/*`).
+
+### Administration des comptes
+
+L'onglet Administration (réservé aux administrateurs) permet de créer des comptes (identifiant, nom affiché, mot de passe, rôle administrateur), de les activer ou désactiver et de changer un mot de passe.
+
+- Tant qu'aucun administrateur n'existe, toute personne connectée accède à l'onglet : créer d'abord un compte administrateur. Le mode `--dev` y donne toujours accès.
+- On ne peut ni se désactiver soi-même ni retirer le dernier administrateur actif.
+- La connexion par visage ne fonctionne que si l'identifiant correspond à une classe du modèle de reconnaissance (Caroline, Florent, Killian). Les autres comptes se connectent par mot de passe tant que le modèle n'est pas réentraîné.
+- Ligne de commande : `python backend/manage_users.py mdp <Prénom>` et `python backend/manage_users.py liste`.
+
+## Limites connues
+
+- Pas de détection de vivacité : une photo présentée à la webcam du poste peut valider l'étape visage, le mot de passe reste la protection.
+- Le broker Mosquitto est en accès anonyme et sans TLS ; l'API et le tableau de bord sont en HTTP (acceptable en réseau local).
+- Les identifiants de la base de données figurent dans `infra/docker-compose.yml` et `backend/db.py`.
+- L'IA des variations est entraînée sur des données simulées.
+- L'adresse IP de l'ESP est dynamique.
+- La validation de bout en bout avec le matériel (présence, caméra, écran, buzzer) est en cours.

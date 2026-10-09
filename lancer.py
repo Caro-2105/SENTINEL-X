@@ -339,7 +339,8 @@ def lancer_services(args):
     if args.dev:
         args.sans_poste = True
         print("\033[33m⚠️  MODE DÉVELOPPEUR : connexion sans visage ni mot de passe. Jamais pour une démo ou une livraison.\033[0m")
-    services = [Service("API", "36", ["main.py"], env_sup={**({"SENTINEL_DEV": "1"} if args.dev else {}), **({"SENTINEL_ENV": "0"} if args.sans_env else {})}, critique=True)]
+    services = [Service("API", "36", ["main.py"], env_sup={**({"SENTINEL_DEV": "1"} if args.dev else {}), **({"SENTINEL_ENV": "0"} if args.sans_env else {}),
+                                                    **({"SENTINEL_METEO": "0"} if args.sans_meteo else {})}, critique=True)]
     if not args.sans_poste:
         services.append(Service("POSTE", "35", ["vision_poste.py"]))
     if not args.sans_porte:
@@ -404,6 +405,8 @@ def main():
                     help="capteurs de l'ESP à interroger, ex. temp,dist,hum,gaz (défaut : temp,dist)")
     ap.add_argument("--sans-env", action="store_true",
                     help="n'envoie ni message ni buzzer pour les alertes d'environnement (gaz, température, humidité)")
+    ap.add_argument("--sans-meteo", action="store_true",
+                    help="désactive les prévisions météo (onglet Prévisions) : aucun appel à Internet")
     ap.add_argument("--sans-porte", action="store_true")
     ap.add_argument("--dev", action="store_true",
                     help="mode développeur : bouton d'entrée sans visage ni mot de passe (pas de caméra du poste)")

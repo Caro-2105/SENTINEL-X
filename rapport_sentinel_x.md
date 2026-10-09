@@ -15,7 +15,7 @@
 5. [Composants matériels](#5-composants-matériels)
 6. [Détails techniques par couche](#6-détails-techniques-par-couche)
 7. [Les "Stories" : scénarios d'alerte](#7-les-stories--scénarios-dalerte)
-8. [Intelligence Artificielle](#8-intelligence-artificielle)
+8. [Intelligence Artificielle](#8-intelligence-artificielle) (dont 8.4 IA prédictive météo)
 9. [Difficultés rencontrées](#9-difficultés-rencontrées)
 10. [État d'avancement et limites](#10-état-davancement-et-limites)
 11. [Conclusion](#11-conclusion)
@@ -165,6 +165,8 @@ Le backend est une application **FastAPI** qui assume plusieurs responsabilités
 
 - **API REST** : `/api/status` (état en direct), `/api/data/history` (courbes), `/api/events` (journal, acquittement), `/api/camera` (commande de la caméra de la porte), `/api/analytics` (analyse IA), `/api/auth/*` (connexion), `/api/health` (santé, publique).
 - **Service du tableau de bord** : le front est servi par le backend à l'adresse `http://127.0.0.1:8000/` (redirigée vers `/app/`), sans second serveur.
+- **Prévisions météo** : `meteo_risque.py` interroge l'API gratuite Open-Meteo (sans clé), calcule une vigilance par seuils et une probabilité d'événement donnée par un modèle d'IA (voir 8.4). Résultats mis en cache 15 minutes, rafraîchis par un thread de fond qui alimente aussi l'alarme de l'ESP. Routes : `GET /api/meteo`, `POST /api/meteo/lieu` (admin).
+- **Administration des comptes** : `GET/POST/PATCH /api/admin/membres` (réservées aux administrateurs) pour créer, activer, désactiver, promouvoir un compte et changer un mot de passe.
 - **Client MQTT** : écoute `sentinel/sensors`, `sentinel/vision`, `sentinel/camera/state`, `sentinel/poste/vision` et `sentinel/poste/state`.
 - **Moteur de scénarios** : à chaque message reçu, l'état est réévalué et une commande est publiée pour le boîtier.
 - **Session sécurisée** : toutes les routes de données exigent un jeton obtenu après la connexion en deux étapes (visage puis mot de passe, voir 8.3).
@@ -204,7 +206,7 @@ ligne2_ecran                              message_ecran
 Un **pool de connexions** (10 connexions max, avec attente quand il est plein et vérification des connexions avant usage) évite d'ouvrir une connexion à chaque message ; sans lui, le tableau de bord saccadait.
 
 > [!NOTE]
-> Les horodatages sont stockés sans fuseau horaire. L'API les renvoie **avec** fuseau, sinon le navigateur les lisait en heure locale et les courbes affichaient 2 heures de décalage (voir section 9). Les colonnes `rfid_uid` et `ir_temp` n'ont plus de capteur associé. Le schéma Merise doit encore être mis à jour avec `membre.mot_de_passe_hash`.
+> Les horodatages sont stockés sans fuseau horaire. L'API les renvoie **avec** fuseau, sinon le navigateur les lisait en heure locale et les courbes affichaient 2 heures de décalage (voir section 9). Les colonnes `rfid_uid` et `ir_temp` n'ont plus de capteur associé. Le schéma Merise doit encore être mis à jour avec `membre.mot_de_passe_hash` et `membre.admin` (rôle administrateur, `BOOLEAN`). Le catalogue `scenario` contient en plus `MET-01` (vigilance météo) et `MET-02` (danger météo).
 
 ### 6.4 Le Pont ESP
 **Fichiers :** `backend/pont_esp.py`, `backend/ordres_esp.py`
@@ -242,20 +244,22 @@ Le firmware n'a que des fonctions ponctuelles, sans alarme continue ni niveaux d
 ### 6.5 Frontend Dashboard
 **Fichiers :** `frontend/index.html`, `frontend/app.js`
 
-Interface web sombre (thème industriel), servie par le backend. Trois onglets :
+Interface web sombre (thème industriel), servie par le backend. Cinq onglets (le dernier n'est visible que des administrateurs) :
 
 - **Capteurs** : tuiles en direct (température, humidité, détecteur de présence, gaz, analyse IA) et courbes **Chart.js** (température + humidité, gaz) sur les 90 dernières secondes, aux échelles qui s'adaptent automatiquement.
 - **Caméra porte** : la caméra n'est active que si une présence est détectée ; un bouton permet de la forcer (extinction automatique après 5 minutes). Le flux vidéo est protégé par une clé aléatoire.
 - **Événements** : journal des alertes avec acquittement par le superviseur.
+- **Prévisions** : niveau de risque météo sur 72 h, conditions actuelles, courbe de probabilité de l'IA avec les rafales, liste des dangers prévus (type, niveau, heure, valeur) et, pour un administrateur, changement de lieu (ville).
+- **Administration** : création de comptes (identifiant, nom affiché, mot de passe, case « Administrateur »), activation / désactivation, rôle admin, changement de mot de passe. Garde-fous : on ne peut ni se désactiver soi-même ni retirer le dernier administrateur actif. Tant qu'aucun administrateur n'existe, toute personne connectée y accède (bandeau d'avertissement) ; le mode `--dev` y donne toujours accès.
 
 L'écran de connexion fait passer par la reconnaissance faciale (webcam du PC) puis le mot de passe. Les rafraîchissements sont séquentiels (état 1 s, courbes 2 s, événements 3 s) et n'agissent que quand une nouvelle mesure arrive, ce qui supprime les à-coups.
 
 ### 6.6 Lancement, outillage et tests
 
 - **`lancer.py`** (ou double-clic sur `lancer.bat`) remplace les cinq terminaux. Au premier lancement il vérifie les bibliothèques et les modèles, démarre Docker, fait choisir la caméra de la porte et celle du poste (mémorisées par PC dans `camera_config.json`) et fait créer le mot de passe du membre. Il démarre ensuite le backend, la caméra du poste, la caméra de la porte et, si demandé, le pont de l'ESP, puis ouvre le navigateur. `Ctrl+C` arrête l'ensemble.
-- **Options** : `--esp <IP>` (avec `--esp-capteurs`, `--esp-seuil`, `--esp-fahrenheit`), `--simulateur [scénario]` (joue un scénario sans matériel), `--sans-porte`, `--sans-env` (n'agit que sur les scénarios d'accès), `--reconfigurer`, `--mot-de-passe`, `--dev`, `--verbeux`.
+- **Options** : `--esp <IP>` (avec `--esp-capteurs`, `--esp-seuil`, `--esp-fahrenheit`), `--simulateur [scénario]` (joue un scénario sans matériel), `--sans-porte`, `--sans-env` (n'agit que sur les scénarios d'accès, coupe aussi l'alarme météo), `--sans-meteo` (désactive les prévisions, aucun appel à Internet), `--reconfigurer`, `--mot-de-passe`, `--dev`, `--verbeux`.
 - **Mode développeur** (`--dev`) : bouton d'entrée sans visage ni mot de passe, accepté uniquement depuis le PC lui-même et uniquement si le serveur a été lancé avec ce mode. **À ne jamais utiliser pour une démonstration ou une livraison.**
-- **Tests** : 71 tests unitaires sans matériel (moteur de scénarios 19, IA analytique 22, authentification 23, traduction des ordres vers l'ESP 7).
+- **Tests** : 94 tests unitaires sans matériel (moteur de scénarios 20, IA analytique 22, authentification et identifiants de compte 25, traduction des ordres vers l'ESP 7, prévisions météo et alarme 20).
 - **Gestion des mots de passe** : `backend/manage_users.py` (`liste`, `mdp <Prénom>`).
 
 ---
@@ -303,6 +307,17 @@ Les types affichés sont : `Fuite de gaz`, `Fumee / incendie`, `Surchauffe`, `Hu
 Les valeurs de gaz sont provisoires. Des filets de sécurité absolus s'ajoutent (gaz ≥ 400 / 600, température ≥ 40 / 50 °C, humidité ≤ 10 % ou ≥ 95 %).
 
 **Retour à la normale.** Seule la variation de la **dernière minute** déclenche l'alerte de variation, et l'IA n'est écoutée que si une mesure a varié d'au moins 5 % sur cette minute. Sans cela, un pic restait « critique » jusqu'à 5 minutes après son retour à la normale. Les limites absolues, elles, restent actives sans délai.
+
+#### Scénarios météo (prévisions Open-Meteo)
+
+| Code | Déclencheur | Réaction |
+|------|-------------|----------|
+| **MET-01** | Vigilance : un seuil de niveau 1 est prévu dans les 72 h | Consigné dans le journal, pas d'alarme à lui seul |
+| **MET-02** | Danger : un seuil de niveau 2 est prévu dans les 72 h | Consigné dans le journal, pas d'alarme à lui seul |
+
+**Seuils (niveau 1 / niveau 2)** : rafales 60 / 90 km/h, pluie 20 / 40 mm cumulés sur 6 h, chaleur 35 / 40 °C, froid -5 / -15 °C.
+
+**Alarme météo.** Si un danger est prévu dans les **24 prochaines heures** (réglable avec `METEO_ALARME_H`), il emprunte le même chemin que les alertes de capteurs (ENV-01 / ENV-02) : niveau 1 = bip intermittent et `ATTENTION / {type}`, niveau 2 = alarme continue et `ALERTE DANGER / {type}`. Types affichés : `Vent violent`, `Fortes pluies`, `Forte chaleur`, `Grand froid`, `Risque meteo IA`. L'IA seule ne déclenche l'alarme qu'à partir de **60 %** de probabilité. Un danger plus lointain reste affiché et consigné, mais le buzzer ne sonne pas pendant des jours. Si un capteur réel est déjà en alerte, le niveau le plus élevé l'emporte. Un résultat de plus de 3 heures (API injoignable) ne déclenche plus d'alarme.
 
 > [!NOTE]
 > Les messages sont limités à **16 caractères par ligne** (écran LCD 1602) et sans accents.
@@ -353,6 +368,24 @@ Connexion en deux étapes, avec identification **sans saisie de nom** :
 
 Limites : pas de détection de vivacité (une photo présentée à la webcam du PC passerait l'étape visage, le mot de passe restant la protection), et trafic en HTTP non chiffré (réseau local).
 
+La création des comptes se fait depuis l'onglet **Administration** du tableau de bord (ou `manage_users.py`). La connexion par visage n'est possible que pour un identifiant égal à une classe du modèle de reconnaissance (Caroline, Florent, Killian) ; les autres comptes se connectent par mot de passe tant que le modèle n'est pas réentraîné.
+
+### 8.4 IA prédictive météo
+**Fichier :** `backend/meteo_risque.py`
+
+**Objectif.** Estimer, pour un lieu donné, la probabilité qu'un événement météo notable survienne dans les 24 heures suivantes.
+
+**Données.** L'API Open-Meteo fournit les prévisions sur 72 h (température, humidité, pression, nuages, vent, rafales, pluie) et un historique horaire de 4 ans issu de la réanalyse ERA5.
+
+**Méthode.** Pour chaque heure de l'historique, on calcule l'état de l'atmosphère et ses tendances : chute de pression sur 3 h et 12 h, cumul de pluie sur 6 h et 24 h, rafales maximales, saison. L'étiquette vaut 1 si un seuil de vigilance est franchi dans les 24 h suivantes. Un modèle de gradient boosting (scikit-learn, `HistGradientBoostingClassifier`) apprend ce lien, puis il est appliqué à chaque heure de la prévision : on obtient une courbe de probabilité sur 72 h. L'entraînement se fait seul, en arrière-plan, au premier affichage d'un lieu (1 à 2 minutes) ; le modèle est conservé dans `backend/meteo_cache/` et réentraîné à chaque changement de lieu.
+
+**Deux niveaux d'analyse complémentaires.** La *vigilance* compare les prévisions à des seuils fixes : explicable, elle donne toujours le « pourquoi ». L'*IA* estime une probabilité à partir de l'état et des tendances de l'atmosphère.
+
+**Évaluation.** Le modèle est testé sur les 20 % les plus récents de l'historique, jamais vus à l'entraînement, avec 24 h d'écart pour éviter toute fuite d'information. La métrique est l'AUC (0,5 = hasard, 1 = parfait), affichée dans le tableau de bord. Les tests automatiques utilisent des données synthétiques : ils prouvent le fonctionnement du code, pas la qualité réelle du modèle.
+
+> [!NOTE]
+> **Limites assumées :** les étiquettes viennent de nos propres seuils, le modèle prédit donc leur franchissement et non un cataclysme au sens large. Les prévisions fournies en entrée sont déjà issues d'un modèle météo professionnel : notre IA est une couche statistique propre à un lieu, et son apport réel face à la prévision brute reste à démontrer. Au-dessous de 50 cas dans l'historique d'un lieu, le modèle refuse de s'entraîner et seule la vigilance par seuils reste active. La prédiction de séismes n'est pas traitée. Ce n'est pas un système d'alerte officiel.
+
 ---
 
 ## 9. Difficultés rencontrées
@@ -393,6 +426,9 @@ PostgreSQL local sur 5432 (Docker passé sur 5433, avec port par défaut corrig�
 ### 🟡 L'écran n'affiche pas les accents
 L'écran LCD ne gère ni accents ni caractères spéciaux, et le firmware coupe le texte au premier guillemet. Tout texte est normalisé en ASCII (`scenarios.py` puis `ordres_esp.py`) et raccourci à 16 caractères.
 
+### 🟡 Prédire des événements rares
+Les phénomènes extrêmes sont peu fréquents dans l'historique d'un seul lieu, ce qui rend l'entraînement fragile. Nous avons choisi des événements « notables » (niveau vigilance jaune) pour avoir assez d'exemples. Nous avons aussi séparé les règles, qui font sonner l'alarme à elles seules, de l'IA, qui ne sonne qu'à forte probabilité, pour limiter les fausses alarmes.
+
 ### 🟡 Anti-doublon dans le journal d'événements
 Sans protection, chaque message (toutes les 2 secondes) pouvait générer un événement. Un **cooldown de 30 secondes** limite un même scénario pour un même sujet.
 
@@ -415,13 +451,16 @@ Quand le capteur IR existait, sa mesure et l'image n'arrivaient pas ensemble. Le
 | Scénarios environnementaux | ✅ Testés (simulation et mesures) | Seuils à affiner |
 | Règle anti-usurpation par IR (ACC-05) | ❌ Inactive | Aucun capteur de chaleur monté |
 | Détection de vivacité (liveness) | ❌ Non réalisée | |
-| Tests unitaires | ✅ 71 tests | Scénarios 19, analytique 22, authentification 23, ordres vers l'ESP 7 |
+| Interface d'administration des comptes | ✅ Développée | Création, activation, rôle admin, mot de passe ; testée sans la vraie base ; visage possible seulement pour les personnes connues du modèle |
+| IA prédictive météo + vigilance | ✅ Développée | Open-Meteo ; AUC réelle à mesurer sur le lieu choisi (tests faits sur données synthétiques) |
+| Alarme météo (écran + buzzer) | ⏳ À valider sur le matériel | Logique testée ; dépend du firmware de l'ESP |
+| Tests unitaires | ✅ 94 tests | Scénarios 20, analytique 22, authentification 25, ordres vers l'ESP 7, météo 20 |
 | Lanceur unique + README de démarrage | ✅ Développé | `lancer.py` ; pas encore éprouvé sur tous les PC de l'équipe |
 | Archivage automatique (`archiver.py`) | ✅ Développé | Rotation CSV + purge PostgreSQL ; non revalidé récemment |
 | Adresse IP de l'ESP | ⚠️ Dynamique | Prévoir une réservation d'adresse dans le routeur |
 | Sécurisation | ⏳ Partielle | Mosquitto anonyme, pas de TLS/HTTPS, identifiants de base de données en clair dans `docker-compose.yml` et `db.py` (à retirer de l'archive livrée) |
 | Mode développeur (`--dev`) | ⚠️ À ne pas utiliser en démo | Contourne l'authentification (PC local seulement) |
-| Schéma Merise | ⏳ À mettre à jour | Ajouter `membre.mot_de_passe_hash`, retirer RFID / IR |
+| Schéma Merise | ⏳ À mettre à jour | Ajouter `membre.mot_de_passe_hash` et `membre.admin`, retirer RFID / IR |
 | Vidéo de démonstration | ⏳ À tourner | Quand le boîtier sera validé de bout en bout |
 
 ---

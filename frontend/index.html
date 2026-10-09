@@ -139,6 +139,7 @@
         <button data-tab="capteurs" class="active">Capteurs</button>
         <button data-tab="camera">Caméra porte</button>
         <button data-tab="evenements">Événements</button>
+        <button data-tab="meteo">Prévisions</button>
         <button data-tab="admin" id="nav-admin" hidden>Administration</button>
     </nav>
 
@@ -182,6 +183,38 @@
                 <tbody id="events-body"></tbody>
             </table>
         </div>
+    </section>
+
+    <!-- ===== Prévisions météo (IA prédictive) ===== -->
+    <section id="tab-meteo" class="tab">
+        <div class="tiles">
+            <div class="tile"><div class="k">Risque sur 72 h</div><span id="met-niveau" class="badge off">—</span></div>
+            <div class="tile"><div class="k">Lieu</div><span id="met-lieu">—</span></div>
+            <div class="tile"><div class="k">Maintenant</div><span id="met-actuel">—</span></div>
+            <div class="tile"><div class="k">IA prédictive</div><span id="met-ia" class="badge off">—</span></div>
+        </div>
+        <div class="grid2">
+            <div class="card">
+                <h2>Probabilité (IA) d'événement notable dans les 24 h suivantes, et rafales</h2>
+                <div class="chart-box"><canvas id="meteoChart"></canvas></div>
+                <p id="met-modele" class="adm-note"></p>
+            </div>
+            <div class="card">
+                <h2>Dangers prévus (72 h)</h2>
+                <table class="events">
+                    <thead><tr><th>Danger</th><th>Niveau</th><th>Quand</th><th>Valeur</th></tr></thead>
+                    <tbody id="met-dangers"></tbody>
+                </table>
+                <form id="met-form" class="adm-form" hidden autocomplete="off">
+                    <label>Changer de lieu (ville)
+                        <input id="met-nom" type="text" maxlength="80" placeholder="ex. Lyon, Nice, Fort-de-France" required>
+                    </label>
+                    <button class="btn" type="submit" id="met-ok" style="margin-top:10px">Appliquer</button>
+                </form>
+                <p id="met-msg" class="adm-msg"></p>
+            </div>
+        </div>
+        <p class="adm-note">Données Open-Meteo. Vigilance : seuils de rafales, de pluie, de chaleur et de froid. IA : modèle entraîné sur 4 ans d'historique du lieu. Outil pédagogique, ce n'est pas une alerte officielle : en cas de danger, suivre Météo-France.</p>
     </section>
 
     <!-- ===== Administration (comptes) ===== -->

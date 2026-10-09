@@ -25,3 +25,5 @@ archives/
 Thumbs.db
 # Réglage des caméras propre à chaque PC
 backend/camera_config.json
+# Cache météo : lieu choisi + modèle entraîné (régénérés automatiquement)
+backend/meteo_cache/
